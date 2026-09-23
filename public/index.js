@@ -2,6 +2,7 @@
 
 import {
   decodeScramjetFrameUrl,
+  toPortableGoogleAuthUrl,
   isGoogleAuthUrl,
   parseNovelPiaCallback,
 } from "./oauth-bridge.js";
@@ -100,7 +101,7 @@ function handleFrameUrl(url) {
   if (!url) return;
 
   if (isGoogleAuthUrl(url)) {
-    lastGoogleAuthUrl = url;
+    lastGoogleAuthUrl = toPortableGoogleAuthUrl(url);
     oauthFab.hidden = false;
     setBridgeVisible(true);
     setStatus(
