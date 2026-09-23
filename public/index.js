@@ -215,7 +215,32 @@ async function ensureFrame() {
   }
 
   frame.frame.addEventListener("load", () => {
-    handleFrameUrl(getCurrentFrameUrl());
+    const currentUrl = getCurrentFrameUrl();
+    handleFrameUrl(currentUrl);
+
+    if (!callbackPending || !currentUrl) return;
+
+    try {
+      const loaded = new URL(currentUrl);
+      const isNovelPiaCallback =
+        (loaded.hostname === "novelpia.com" ||
+          loaded.hostname === "www.novelpia.com") &&
+        loaded.pathname === "/proc/login_google" &&
+        (loaded.searchParams.has("code") || loaded.searchParams.has("error"));
+
+      if (isNovelPiaCallback) {
+        setStatus(
+          "콜백 응답을 받았어요. 로그인 상태를 확인하기 위해 노벨피아 홈으로 돌아갑니다.",
+          "ready",
+        );
+
+        setTimeout(() => {
+          if (callbackPending && frame) {
+            frame.go(NOVELPIA_HOME);
+          }
+        }, 500);
+      }
+    } catch {}
   });
 
   setInterval(() => {
@@ -296,7 +321,7 @@ oauthSubmitCallback.addEventListener("click", async () => {
   setTimeout(() => {
     if (callbackPending) {
       setStatus(
-        "콜백 페이지에 아직 머물러 있어요. 아래 노벨피아 화면에 오류가 표시되는지 확인하세요.",
+        "로그인 상태 확인 중이에요. 노벨피아 홈으로 이동되지 않았다면 OAuth 버튼의 '현재 주소 다시 확인'을 눌러주세요.",
         "warning",
       );
     }
