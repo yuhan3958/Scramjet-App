@@ -6,30 +6,26 @@
 			name="viewport"
 			content="width=device-width, initial-scale=1.0, shrink-to-fit=no"
 		/>
-		<title>Scramjet</title>
+		<title>Novelpia Proxy</title>
 
 		<link rel="shortcut icon" content="favicon.webp" />
-	
+
 		<script src="/scram/scramjet.all.js"></script>
 		<script src="/baremux/index.js"></script>
-		
+
 		<link rel="stylesheet" href="index.css" />
 		<script src="register-sw.js" defer></script>
 		<script src="search.js" defer></script>
-		<script src="index.js" defer></script>
+		<script type="module" src="index.js"></script>
 	</head>
 
 	<body>
 		<div title="Scramjet Logo" class="flex-center logo-wrapper header-center">
 			<img class="logo" src="sj.png" alt="Scramjet" />
-			<h1>Scramjet | MW</h1>
+			<h1>Novelpia Proxy</h1>
 		</div>
 		<div class="flex-center desc left-margin">
-			<p>
-				Scramjet is an experimental interception based web proxy designed to
-				evade internet censorship, bypass arbitrary web browser restrictions and
-				innovate web proxy technologies.
-			</p>
+			<p>노벨피아를 여는 중입니다. 문제가 생기면 아래 오류가 표시됩니다.</p>
 		</div>
 
 		<form id="sj-form" class="flex-center">
@@ -38,29 +34,47 @@
 				value="https://www.google.com/search?q=%s"
 				type="hidden"
 			/>
-			<input id="sj-address" type="text" placeholder="Search the web freely" />
+			<input id="sj-address" type="text" placeholder="https://novelpia.com/" />
 		</form>
+
 		<div class="desc left-margin">
 			<p id="sj-error"></p>
 			<pre id="sj-error-code"></pre>
 		</div>
-		<footer>
-			<div>
-				<a
-					title="The Mercury Workshop GitHub organization"
-					href="https://github.com/MercuryWorkshop"
-					>Mercury Workshop</a
-				>
-				<a
-					title="The example demo app for Scramjet"
-					href="https://github.com/MercuryWorkshop/Scramjet-Demo"
-					>GitHub</a
-				>
-				<a title="License information" href="credits.html">Credits</a>
+
+		<button id="oauth-fab" class="oauth-fab" type="button" hidden>OAuth</button>
+
+		<section id="oauth-bridge" class="oauth-bridge" hidden>
+			<div class="oauth-head">
+				<div>
+					<strong>Google 로그인 브리지</strong>
+					<p>Google은 밖에서 로그인하고, 노벨피아 결과만 이 세션으로 돌려보냅니다.</p>
+				</div>
+				<button id="oauth-close" class="oauth-close" type="button" aria-label="닫기">×</button>
 			</div>
-			<div>
-				<span>Scramjet &copy; MW 2025</span>
+
+			<div class="oauth-actions">
+				<button id="oauth-open-google" type="button">Google에서 로그인</button>
+				<button id="oauth-show-return" type="button">로그인 결과 가져오기</button>
+				<button id="oauth-refresh" type="button">현재 주소 다시 확인</button>
 			</div>
-		</footer>
+
+			<div id="oauth-return-panel" class="oauth-return" hidden>
+				<label for="oauth-callback">Google 로그인 후 남은 novelpia.com 주소 전체</label>
+				<textarea
+					id="oauth-callback"
+					autocapitalize="off"
+					autocomplete="off"
+					spellcheck="false"
+					placeholder="https://novelpia.com/...?...code=...&state=..."
+				></textarea>
+				<button id="oauth-submit-callback" type="button">이 세션으로 돌려보내기</button>
+			</div>
+
+			<p id="oauth-status" class="oauth-status" aria-live="polite">
+				노벨피아에서 Google 로그인을 누르면 자동으로 감지합니다.
+			</p>
+			<p class="oauth-security">code/state가 들어 있는 실제 주소는 다른 사람에게 보내지 마세요.</p>
+		</section>
 	</body>
 </html>
