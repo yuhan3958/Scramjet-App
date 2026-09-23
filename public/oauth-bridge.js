@@ -1,3 +1,50 @@
+const PORTABLE_GOOGLE_OAUTH_PARAMS = [
+  'client_id',
+  'redirect_uri',
+  'response_type',
+  'scope',
+  'access_type',
+  'state',
+  'prompt',
+  'approval_prompt',
+  'include_granted_scopes',
+  'login_hint',
+  'hd',
+  'nonce',
+  'code_challenge',
+  'code_challenge_method',
+  'response_mode',
+];
+
+export function toPortableGoogleAuthUrl(value) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.hostname !== 'accounts.google.com') {
+      return value;
+    }
+
+    if (url.pathname.startsWith('/o/oauth2/') && url.pathname.endsWith('/auth')) {
+      return url.toString();
+    }
+
+    const required = ['client_id', 'redirect_uri', 'response_type'];
+    if (!required.every((name) => url.searchParams.has(name))) {
+      return url.toString();
+    }
+
+    const portable = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+    for (const name of PORTABLE_GOOGLE_OAUTH_PARAMS) {
+      for (const item of url.searchParams.getAll(name)) {
+        portable.searchParams.append(name, item);
+      }
+    }
+
+    return portable.toString();
+  } catch {
+    return value;
+  }
+}
+
 export function isGoogleAuthUrl(value) {
   try {
     const url = new URL(value);
