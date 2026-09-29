@@ -8,6 +8,7 @@ import {
 } from "./oauth-bridge.js";
 
 const NOVELPIA_HOME = "https://novelpia.com/";
+const NOVELPIA_LOGIN = "https://novelpia.com/page/login";
 
 /** @type {HTMLFormElement} */
 const form = document.getElementById("sj-form");
@@ -102,6 +103,7 @@ function handleFrameUrl(url) {
 
   if (isGoogleAuthUrl(url)) {
     lastGoogleAuthUrl = toPortableGoogleAuthUrl(url);
+    oauthOpenGoogle.textContent = "Google에서 로그인";
     oauthFab.hidden = false;
     setBridgeVisible(true);
     setStatus(
@@ -274,11 +276,15 @@ oauthRefresh.addEventListener("click", () => {
   refreshOAuthState();
 });
 
-oauthOpenGoogle.addEventListener("click", () => {
+oauthOpenGoogle.addEventListener("click", async () => {
   refreshOAuthState();
 
   if (!lastGoogleAuthUrl || !isGoogleAuthUrl(lastGoogleAuthUrl)) {
-    setStatus("Google 로그인 주소를 먼저 감지해야 해요.", "warning");
+    setStatus(
+      "노벨피아 로그인 페이지를 직접 열었어요. 페이지 안에서 Google 로그인을 눌러주세요.",
+      "ready",
+    );
+    await navigate(NOVELPIA_LOGIN);
     return;
   }
 
@@ -330,6 +336,7 @@ oauthSubmitCallback.addEventListener("click", async () => {
 
 async function boot() {
   address.value = NOVELPIA_HOME;
+  oauthOpenGoogle.textContent = "노벨피아 로그인 열기";
 
   try {
     await navigate(NOVELPIA_HOME);
