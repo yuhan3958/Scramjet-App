@@ -52,6 +52,7 @@ let frame = null;
 let proxyReadyPromise = null;
 let lastGoogleAuthUrl = null;
 let callbackPending = false;
+let lastObservedNavigation = null;
 
 function setStatus(message, kind = "info") {
   oauthStatus.textContent = message;
@@ -104,6 +105,46 @@ function updateCurrentUrl(url) {
   if (!url) return;
   currentUrlBar.hidden = false;
   currentUrlInput.value = url;
+}
+
+function recordObservedNavigation(kind, url) {
+  if (!url) return;
+  const value = String(url);
+  lastObservedNavigation = value;
+
+  if (isGoogleAuthUrl(value)) {
+    lastGoogleAuthUrl = toPortableGoogleAuthUrl(value);
+    oauthOpenGoogle.textContent = "Google에서 로그인";
+    setBridgeVisible(true);
+    setStatus(
+      `${kind}에서 Google 로그인 URL을 감지했어요.`,
+      "ready",
+    );
+  } else {
+    setStatus(
+      `${kind} 감지: ${value.length > 180 ? value.slice(0, 177) + "..." : value}`,
+      "info",
+    );
+  }
+}
+
+function hookFrameWindowOpen(win) {
+  try {
+    if (!win || win.__novelpiaOauthOpenHooked) return;
+    const originalOpen = win.open;
+    if (typeof originalOpen !== "function") return;
+
+    const wrappedOpen = function (...args) {
+      if (args[0]) recordObservedNavigation("window.open", args[0]);
+      return originalOpen.apply(this, args);
+    };
+
+    Object.defineProperty(win, "__novelpiaOauthOpenHooked", {
+      value: true,
+      configurable: true,
+    });
+    win.open = wrappedOpen;
+  } catch {}
 }
 
 function handleFrameUrl(url) {
@@ -292,6 +333,18 @@ async function ensureFrame() {
   oauthFab.hidden = false;
 
   if (typeof frame.addEventListener === "function") {
+    frame.addEventListener("navigate", (event) => {
+      const url =
+        typeof event === "string"
+          ? event
+          : event?.url || event?.detail?.url;
+      recordObservedNavigation("navigate", url);
+    });
+
+    frame.addEventListener("contextInit", (event) => {
+      hookFrameWindowOpen(event?.window || frame?.frame?.contentWindow);
+    });
+
     frame.addEventListener("urlchange", (event) => {
       const url =
         typeof event === "string"
@@ -302,6 +355,7 @@ async function ensureFrame() {
   }
 
   frame.frame.addEventListener("load", () => {
+    hookFrameWindowOpen(frame.frame?.contentWindow);
     const currentUrl = getCurrentFrameUrl();
     handleFrameUrl(currentUrl);
 
@@ -359,6 +413,15 @@ oauthClose.addEventListener("click", () => {
 
 oauthRefresh.addEventListener("click", () => {
   refreshOAuthState();
+
+  if (lastObservedNavigation) {
+    setStatus(
+      `마지막 이동 요청: ${lastObservedNavigation.length > 180
+        ? lastObservedNavigation.slice(0, 177) + "..."
+        : lastObservedNavigation}`,
+      "info",
+    );
+  }
 });
 
 currentUrlCopy.addEventListener("click", async () => {
