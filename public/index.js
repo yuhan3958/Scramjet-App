@@ -118,11 +118,11 @@ function handleFrameUrl(url) {
       parsedUrl.searchParams.get("login_req") === "1";
 
     if (loginRequested) {
-      oauthOpenGoogle.textContent = "노벨피아 로그인 버튼 누르기";
+      oauthOpenGoogle.textContent = "노벨피아 로그인 모달 열기";
       oauthFab.hidden = false;
       setBridgeVisible(true);
       setStatus(
-        "노벨피아가 로그인 요청 상태예요. 아래 버튼을 누르면 페이지 안의 실제 로그인 버튼을 직접 누릅니다.",
+        "노벨피아가 로그인 요청 상태예요. 아래 버튼을 누르면 숨겨진 로그인 모달을 표시합니다.",
         "ready",
       );
     }
@@ -154,58 +154,62 @@ function handleFrameUrl(url) {
   }
 }
 
-function clickNovelPiaLoginTrigger() {
+function revealNovelPiaLoginModal() {
   if (!frame?.frame?.contentWindow) return false;
 
   try {
-    const doc = frame.frame.contentWindow.document;
-    const candidates = [
-      ...doc.querySelectorAll("a, button, [role=\"button\"], [onclick]"),
-    ];
+    const win = frame.frame.contentWindow;
+    const doc = win.document;
+    const elements = [...doc.querySelectorAll("img, a, button, div, span, section")];
 
-    const visible = candidates.filter((element) => {
-      const rect = element.getBoundingClientRect();
-      const style = frame.frame.contentWindow.getComputedStyle(element);
+    const target = elements.find((element) => {
+      const text = (element.textContent || "").replace(/\s+/g, " ").trim();
+      const alt = (element.getAttribute("alt") || "").trim();
+      const title = (element.getAttribute("title") || "").trim();
+      const combined = `${text} ${alt} ${title}`;
       return (
-        rect.width > 0 &&
-        rect.height > 0 &&
-        style.display !== "none" &&
-        style.visibility !== "hidden"
+        combined.includes("구글로 로그인") ||
+        combined.includes("SNS 계정 으로 간편하게 로그인")
       );
     });
 
-    const score = (element) => {
-      const text = (element.textContent || "").replace(/\s+/g, " ").trim();
-      const aria = (element.getAttribute("aria-label") || "").trim();
-      const title = (element.getAttribute("title") || "").trim();
-      const href = (element.getAttribute("href") || "").toLowerCase();
-      const onclick = (element.getAttribute("onclick") || "").toLowerCase();
-      const combined = `${text} ${aria} ${title}`;
-
-      let value = 0;
-      if (text === "로그인") value += 100;
-      else if (combined.includes("로그인")) value += 70;
-      if (combined.toLowerCase().includes("login")) value += 50;
-      if (href.includes("login")) value += 35;
-      if (onclick.includes("login")) value += 25;
-      return value;
-    };
-
-    const target = visible
-      .map((element) => ({ element, score: score(element) }))
-      .filter((item) => item.score > 0)
-      .sort((a, b) => b.score - a.score)[0]?.element;
-
     if (!target) return false;
 
+    let current = target;
+    let revealed = false;
+
+    while (current && current !== doc.body) {
+      const style = win.getComputedStyle(current);
+      const marker = `${current.id || ""} ${current.className || ""}`.toLowerCase();
+      const looksLikeLoginLayer =
+        /login|signin|modal|popup|layer|member|sns|social/.test(marker);
+
+      const hidden =
+        current.hidden ||
+        current.getAttribute("aria-hidden") === "true" ||
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        style.opacity === "0";
+
+      if (hidden || looksLikeLoginLayer) {
+        current.hidden = false;
+        current.removeAttribute("aria-hidden");
+        current.style.setProperty("display", "block", "important");
+        current.style.setProperty("visibility", "visible", "important");
+        current.style.setProperty("opacity", "1", "important");
+        current.style.setProperty("pointer-events", "auto", "important");
+        revealed = true;
+      }
+
+      current = current.parentElement;
+    }
+
     target.scrollIntoView({ block: "center", inline: "center" });
-    target.click();
-    return true;
+    return revealed || true;
   } catch {
     return false;
   }
 }
-
 function refreshOAuthState() {
   const url = getCurrentFrameUrl();
   if (url) handleFrameUrl(url);
@@ -377,18 +381,18 @@ oauthOpenGoogle.addEventListener("click", async () => {
   refreshOAuthState();
 
   if (!lastGoogleAuthUrl || !isGoogleAuthUrl(lastGoogleAuthUrl)) {
-    const clicked = clickNovelPiaLoginTrigger();
+    const revealed = revealNovelPiaLoginModal();
 
-    if (clicked) {
+    if (revealed) {
       setStatus(
-        "페이지 안의 로그인 버튼을 직접 눌렀어요. 로그인 UI가 열리는지 확인하세요.",
+        "숨겨진 로그인 모달을 표시했어요. 모달 안의 구글 로그인 버튼을 직접 눌러주세요.",
         "ready",
       );
       return;
     }
 
     setStatus(
-      "현재 화면에서 로그인 버튼을 찾지 못했어요. 우측 상단 로그인 영역이 보이게 한 뒤 다시 눌러주세요.",
+      "현재 DOM에서 노벨피아 로그인 모달을 찾지 못했어요.",
       "warning",
     );
     return;
@@ -442,7 +446,7 @@ oauthSubmitCallback.addEventListener("click", async () => {
 
 async function boot() {
   address.value = NOVELPIA_HOME;
-  oauthOpenGoogle.textContent = "노벨피아 로그인 버튼 누르기";
+  oauthOpenGoogle.textContent = "노벨피아 로그인 모달 열기";
 
   try {
     await navigate(NOVELPIA_HOME);
