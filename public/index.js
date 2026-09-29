@@ -31,6 +31,9 @@ const oauthCallback = document.getElementById("oauth-callback");
 const oauthSubmitCallback = document.getElementById("oauth-submit-callback");
 const oauthRefresh = document.getElementById("oauth-refresh");
 const oauthStatus = document.getElementById("oauth-status");
+const currentUrlBar = document.getElementById("current-url-bar");
+const currentUrlInput = document.getElementById("current-url");
+const currentUrlCopy = document.getElementById("current-url-copy");
 
 const { ScramjetController } = $scramjetLoadController();
 
@@ -98,8 +101,15 @@ function getCurrentFrameUrl() {
   }
 }
 
+function updateCurrentUrl(url) {
+  if (!url) return;
+  currentUrlBar.hidden = false;
+  currentUrlInput.value = url;
+}
+
 function handleFrameUrl(url) {
   if (!url) return;
+  updateCurrentUrl(url);
 
   if (isGoogleAuthUrl(url)) {
     lastGoogleAuthUrl = toPortableGoogleAuthUrl(url);
@@ -203,6 +213,8 @@ async function ensureFrame() {
   frame = scramjet.createFrame();
   frame.frame.id = "sj-frame";
   document.body.appendChild(frame.frame);
+  currentUrlBar.hidden = false;
+  updateCurrentUrl("about:blank");
 
   oauthFab.hidden = false;
 
@@ -274,6 +286,22 @@ oauthClose.addEventListener("click", () => {
 
 oauthRefresh.addEventListener("click", () => {
   refreshOAuthState();
+});
+
+currentUrlCopy.addEventListener("click", async () => {
+  const value = currentUrlInput.value;
+  if (!value) return;
+
+  try {
+    await navigator.clipboard.writeText(value);
+    currentUrlCopy.textContent = "복사됨";
+    setTimeout(() => {
+      currentUrlCopy.textContent = "복사";
+    }, 1200);
+  } catch {
+    currentUrlInput.focus();
+    currentUrlInput.select();
+  }
 });
 
 oauthOpenGoogle.addEventListener("click", async () => {
