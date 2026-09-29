@@ -96,3 +96,21 @@ export function parseNovelPiaCallback(value) {
     return { ok: false, error: '올바른 URL 형식이 아닙니다.' };
   }
 }
+
+
+export function getNovelPiaLoginRedirect(value) {
+  try {
+    const url = new URL(value);
+    const validHost =
+      url.protocol === 'https:' &&
+      (url.hostname === 'novelpia.com' || url.hostname === 'www.novelpia.com');
+
+    if (!validHost || url.pathname !== '/' || url.searchParams.get('login_req') !== '1') {
+      return null;
+    }
+
+    return 'https://novelpia.com/myaccount/signin';
+  } catch {
+    return null;
+  }
+}
