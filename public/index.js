@@ -2,14 +2,12 @@
 
 import {
   decodeScramjetFrameUrl,
-  getNovelPiaLoginRedirect,
   toPortableGoogleAuthUrl,
   isGoogleAuthUrl,
   parseNovelPiaCallback,
 } from "./oauth-bridge.js";
 
 const NOVELPIA_HOME = "https://novelpia.com/";
-const NOVELPIA_LOGIN = "https://novelpia.com/myaccount/signin";
 
 /** @type {HTMLFormElement} */
 const form = document.getElementById("sj-form");
@@ -112,15 +110,23 @@ function handleFrameUrl(url) {
   if (!url) return;
   updateCurrentUrl(url);
 
-  const loginRedirect = getNovelPiaLoginRedirect(url);
-  if (loginRedirect && frame) {
-    setStatus(
-      "노벨피아 로그인 요청을 감지했어요. 로그인 페이지로 이동합니다.",
-      "ready",
-    );
-    frame.go(loginRedirect);
-    return;
-  }
+  try {
+    const parsedUrl = new URL(url);
+    const loginRequested =
+      (parsedUrl.hostname === "novelpia.com" ||
+        parsedUrl.hostname === "www.novelpia.com") &&
+      parsedUrl.searchParams.get("login_req") === "1";
+
+    if (loginRequested) {
+      oauthOpenGoogle.textContent = "노벨피아 로그인 버튼 누르기";
+      oauthFab.hidden = false;
+      setBridgeVisible(true);
+      setStatus(
+        "노벨피아가 로그인 요청 상태예요. 아래 버튼을 누르면 페이지 안의 실제 로그인 버튼을 직접 누릅니다.",
+        "ready",
+      );
+    }
+  } catch {}
 
   if (isGoogleAuthUrl(url)) {
     lastGoogleAuthUrl = toPortableGoogleAuthUrl(url);
@@ -145,6 +151,58 @@ function handleFrameUrl(url) {
       setStatus("노벨피아로 돌아왔어요. 로그인 상태를 확인하세요.", "success");
       setTimeout(() => setBridgeVisible(false), 1200);
     }
+  }
+}
+
+function clickNovelPiaLoginTrigger() {
+  if (!frame?.frame?.contentWindow) return false;
+
+  try {
+    const doc = frame.frame.contentWindow.document;
+    const candidates = [
+      ...doc.querySelectorAll("a, button, [role=\"button\"], [onclick]"),
+    ];
+
+    const visible = candidates.filter((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = frame.frame.contentWindow.getComputedStyle(element);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden"
+      );
+    });
+
+    const score = (element) => {
+      const text = (element.textContent || "").replace(/\s+/g, " ").trim();
+      const aria = (element.getAttribute("aria-label") || "").trim();
+      const title = (element.getAttribute("title") || "").trim();
+      const href = (element.getAttribute("href") || "").toLowerCase();
+      const onclick = (element.getAttribute("onclick") || "").toLowerCase();
+      const combined = `${text} ${aria} ${title}`;
+
+      let value = 0;
+      if (text === "로그인") value += 100;
+      else if (combined.includes("로그인")) value += 70;
+      if (combined.toLowerCase().includes("login")) value += 50;
+      if (href.includes("login")) value += 35;
+      if (onclick.includes("login")) value += 25;
+      return value;
+    };
+
+    const target = visible
+      .map((element) => ({ element, score: score(element) }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score)[0]?.element;
+
+    if (!target) return false;
+
+    target.scrollIntoView({ block: "center", inline: "center" });
+    target.click();
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -319,11 +377,20 @@ oauthOpenGoogle.addEventListener("click", async () => {
   refreshOAuthState();
 
   if (!lastGoogleAuthUrl || !isGoogleAuthUrl(lastGoogleAuthUrl)) {
+    const clicked = clickNovelPiaLoginTrigger();
+
+    if (clicked) {
+      setStatus(
+        "페이지 안의 로그인 버튼을 직접 눌렀어요. 로그인 UI가 열리는지 확인하세요.",
+        "ready",
+      );
+      return;
+    }
+
     setStatus(
-      "노벨피아 로그인 페이지를 직접 열었어요. 페이지 안에서 Google 로그인을 눌러주세요.",
-      "ready",
+      "현재 화면에서 로그인 버튼을 찾지 못했어요. 우측 상단 로그인 영역이 보이게 한 뒤 다시 눌러주세요.",
+      "warning",
     );
-    await navigate(NOVELPIA_LOGIN);
     return;
   }
 
@@ -375,7 +442,7 @@ oauthSubmitCallback.addEventListener("click", async () => {
 
 async function boot() {
   address.value = NOVELPIA_HOME;
-  oauthOpenGoogle.textContent = "노벨피아 로그인 열기";
+  oauthOpenGoogle.textContent = "노벨피아 로그인 버튼 누르기";
 
   try {
     await navigate(NOVELPIA_HOME);
