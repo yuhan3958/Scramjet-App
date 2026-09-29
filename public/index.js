@@ -2,13 +2,14 @@
 
 import {
   decodeScramjetFrameUrl,
+  getNovelPiaLoginRedirect,
   toPortableGoogleAuthUrl,
   isGoogleAuthUrl,
   parseNovelPiaCallback,
 } from "./oauth-bridge.js";
 
 const NOVELPIA_HOME = "https://novelpia.com/";
-const NOVELPIA_LOGIN = "https://novelpia.com/page/login";
+const NOVELPIA_LOGIN = "https://novelpia.com/myaccount/signin";
 
 /** @type {HTMLFormElement} */
 const form = document.getElementById("sj-form");
@@ -110,6 +111,16 @@ function updateCurrentUrl(url) {
 function handleFrameUrl(url) {
   if (!url) return;
   updateCurrentUrl(url);
+
+  const loginRedirect = getNovelPiaLoginRedirect(url);
+  if (loginRedirect && frame) {
+    setStatus(
+      "노벨피아 로그인 요청을 감지했어요. 로그인 페이지로 이동합니다.",
+      "ready",
+    );
+    frame.go(loginRedirect);
+    return;
+  }
 
   if (isGoogleAuthUrl(url)) {
     lastGoogleAuthUrl = toPortableGoogleAuthUrl(url);

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  getNovelPiaLoginRedirect,
   toPortableGoogleAuthUrl,
   isGoogleAuthUrl,
   decodeScramjetFrameUrl,
@@ -79,4 +80,21 @@ test('rejects non-NovelPia or non-HTTPS callback URLs', () => {
 test('rejects NovelPia URLs that do not look like OAuth callbacks', () => {
   const result = parseNovelPiaCallback('https://novelpia.com/novel/123');
   assert.equal(result.ok, false);
+});
+
+
+test('redirects NovelPia login_req=1 state to the real sign-in page', () => {
+  assert.equal(
+    getNovelPiaLoginRedirect('https://novelpia.com/?login_req=1'),
+    'https://novelpia.com/myaccount/signin',
+  );
+  assert.equal(
+    getNovelPiaLoginRedirect('https://www.novelpia.com/?login_req=1'),
+    'https://novelpia.com/myaccount/signin',
+  );
+});
+
+test('does not redirect ordinary NovelPia pages', () => {
+  assert.equal(getNovelPiaLoginRedirect('https://novelpia.com/'), null);
+  assert.equal(getNovelPiaLoginRedirect('https://novelpia.com/novel/123'), null);
 });
