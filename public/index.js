@@ -53,6 +53,11 @@ let proxyReadyPromise = null;
 let lastGoogleAuthUrl = null;
 let callbackPending = false;
 let lastObservedNavigation = null;
+let loginModalWaitTimer = null;
+let loginModalWaitStartedAt = 0;
+
+const LOGIN_MODAL_WAIT_INTERVAL_MS = 2000;
+const LOGIN_MODAL_WAIT_TIMEOUT_MS = 15 * 60 * 1000;
 
 function setStatus(message, kind = "info") {
   oauthStatus.textContent = message;
@@ -170,6 +175,7 @@ function handleFrameUrl(url) {
   } catch {}
 
   if (isGoogleAuthUrl(url)) {
+    stopLoginModalWait();
     lastGoogleAuthUrl = toPortableGoogleAuthUrl(url);
     oauthOpenGoogle.textContent = "Google에서 로그인";
     oauthFab.hidden = false;
@@ -193,6 +199,14 @@ function handleFrameUrl(url) {
       setTimeout(() => setBridgeVisible(false), 1200);
     }
   }
+}
+
+function stopLoginModalWait() {
+  if (loginModalWaitTimer) {
+    clearInterval(loginModalWaitTimer);
+    loginModalWaitTimer = null;
+  }
+  loginModalWaitStartedAt = 0;
 }
 
 function revealNovelPiaLoginModal() {
@@ -251,6 +265,42 @@ function revealNovelPiaLoginModal() {
     return false;
   }
 }
+function waitForNovelPiaLoginModal() {
+  stopLoginModalWait();
+  loginModalWaitStartedAt = Date.now();
+
+  const tryReveal = () => {
+    if (revealNovelPiaLoginModal()) {
+      stopLoginModalWait();
+      setStatus(
+        "로그인 DOM이 나타났어요. 모달을 표시했습니다. 안의 구글 로그인 버튼을 직접 눌러주세요.",
+        "success",
+      );
+      return;
+    }
+
+    const elapsed = Date.now() - loginModalWaitStartedAt;
+    if (elapsed >= LOGIN_MODAL_WAIT_TIMEOUT_MS) {
+      stopLoginModalWait();
+      setStatus(
+        "15분 동안 기다렸지만 로그인 DOM이 나타나지 않았어요.",
+        "warning",
+      );
+      return;
+    }
+
+    setStatus(
+      `로그인 DOM을 기다리는 중… ${Math.floor(elapsed / 1000)}초`,
+      "info",
+    );
+  };
+
+  tryReveal();
+  if (!loginModalWaitTimer) {
+    loginModalWaitTimer = setInterval(tryReveal, LOGIN_MODAL_WAIT_INTERVAL_MS);
+  }
+}
+
 function refreshOAuthState() {
   const url = getCurrentFrameUrl();
   if (url) handleFrameUrl(url);
@@ -444,20 +494,7 @@ oauthOpenGoogle.addEventListener("click", async () => {
   refreshOAuthState();
 
   if (!lastGoogleAuthUrl || !isGoogleAuthUrl(lastGoogleAuthUrl)) {
-    const revealed = revealNovelPiaLoginModal();
-
-    if (revealed) {
-      setStatus(
-        "숨겨진 로그인 모달을 표시했어요. 모달 안의 구글 로그인 버튼을 직접 눌러주세요.",
-        "ready",
-      );
-      return;
-    }
-
-    setStatus(
-      "현재 DOM에서 노벨피아 로그인 모달을 찾지 못했어요.",
-      "warning",
-    );
+    waitForNovelPiaLoginModal();
     return;
   }
 
