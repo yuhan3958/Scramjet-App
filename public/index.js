@@ -42,6 +42,9 @@ const scramjet = new ScramjetController({
     all: "/scram/scramjet.all.js",
     sync: "/scram/scramjet.sync.js",
   },
+  flags: {
+    sourcemaps: false,
+  },
 });
 
 scramjet.init();
@@ -327,6 +330,7 @@ async function registerServiceWorker() {
   }
 
   await navigator.serviceWorker.register("./sw.js");
+  await navigator.serviceWorker.ready;
 }
 
 function resolveInput(value) {
@@ -362,9 +366,15 @@ async function ensureProxyReady() {
       location.host +
       "/wisp/";
 
-    if ((await connection.getTransport()) !== "/libcurl/index.mjs") {
-      await connection.setTransport("/libcurl/index.mjs", [{ websocket: wispUrl }]);
-    }
+    // BareMux can retain the selected transport name while its actual
+    // transport client has been lost (for example after a worker restart).
+    // Always recreate the libcurl transport before Scramjet starts fetching.
+    await connection.setTransport("/libcurl/index.mjs", [
+      {
+        websocket: wispUrl,
+        connections: [96, 80, 16],
+      },
+    ]);
   })();
 
   return proxyReadyPromise;
