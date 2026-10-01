@@ -1,7 +1,6 @@
 "use strict";
 
 import {
-  decodeScramjetFrameUrl,
   toPortableGoogleAuthUrl,
   isGoogleAuthUrl,
   parseNovelPiaCallback,
@@ -9,15 +8,9 @@ import {
 
 const NOVELPIA_HOME = "https://novelpia.com/";
 
-/** @type {HTMLFormElement} */
 const form = document.getElementById("sj-form");
-/** @type {HTMLInputElement} */
 const address = document.getElementById("sj-address");
-/** @type {HTMLInputElement} */
-const searchEngine = document.getElementById("sj-search-engine");
-/** @type {HTMLParagraphElement} */
 const error = document.getElementById("sj-error");
-/** @type {HTMLPreElement} */
 const errorCode = document.getElementById("sj-error-code");
 
 const oauthFab = document.getElementById("oauth-fab");
@@ -34,25 +27,10 @@ const currentUrlBar = document.getElementById("current-url-bar");
 const currentUrlInput = document.getElementById("current-url");
 const currentUrlCopy = document.getElementById("current-url-copy");
 
-const { ScramjetController } = $scramjetLoadController();
-
-const scramjet = new ScramjetController({
-  files: {
-    wasm: "/scram/scramjet.wasm.wasm",
-    all: "/scram/scramjet.all.js",
-    sync: "/scram/scramjet.sync.js",
-  },
-  flags: {
-    sourcemaps: false,
-  },
-});
-
-scramjet.init();
-
-const connection = new BareMux.BareMuxConnection("/baremux/worker.js");
-
+let controller = null;
 let frame = null;
-let proxyReadyPromise = null;
+let initPromise = null;
+let currentTargetUrl = null;
 let lastGoogleAuthUrl = null;
 let callbackPending = false;
 let lastObservedNavigation = null;
@@ -83,36 +61,11 @@ function isNovelPiaUrl(value) {
   }
 }
 
-function getCurrentFrameUrl() {
-  if (!frame) return null;
-
-  if (typeof frame.url === "string" && frame.url) {
-    return frame.url;
-  }
-
-  try {
-    const raw = frame.frame?.contentWindow?.location?.href || frame.frame?.src || null;
-    if (!raw) return null;
-
-    const decoded =
-      frame.prefix && frame.controller?.config?.codec?.decode
-        ? decodeScramjetFrameUrl(
-            raw,
-            new URL(frame.prefix, location.href).href,
-            frame.controller.config.codec.decode,
-          )
-        : null;
-
-    return decoded || raw;
-  } catch {
-    return frame.frame?.src || null;
-  }
-}
-
 function updateCurrentUrl(url) {
   if (!url) return;
+  currentTargetUrl = String(url);
   currentUrlBar.hidden = false;
-  currentUrlInput.value = url;
+  currentUrlInput.value = currentTargetUrl;
 }
 
 function recordObservedNavigation(kind, url) {
@@ -121,28 +74,23 @@ function recordObservedNavigation(kind, url) {
   lastObservedNavigation = value;
 
   if (isGoogleAuthUrl(value)) {
+    stopLoginModalWait();
     lastGoogleAuthUrl = toPortableGoogleAuthUrl(value);
     oauthOpenGoogle.textContent = "Google에서 로그인";
+    oauthFab.hidden = false;
     setBridgeVisible(true);
-    setStatus(
-      `${kind}에서 Google 로그인 URL을 감지했어요.`,
-      "ready",
-    );
-  } else {
-    setStatus(
-      `${kind} 감지: ${value.length > 180 ? value.slice(0, 177) + "..." : value}`,
-      "info",
-    );
+    setStatus(`${kind}에서 Google 로그인 URL을 감지했어요.`, "ready");
   }
 }
 
 function hookFrameWindowOpen(win) {
   try {
     if (!win || win.__novelpiaOauthOpenHooked) return;
+
     const originalOpen = win.open;
     if (typeof originalOpen !== "function") return;
 
-    const wrappedOpen = function (...args) {
+    win.open = function (...args) {
       if (args[0]) recordObservedNavigation("window.open", args[0]);
       return originalOpen.apply(this, args);
     };
@@ -151,56 +99,66 @@ function hookFrameWindowOpen(win) {
       value: true,
       configurable: true,
     });
-    win.open = wrappedOpen;
   } catch {}
 }
 
-function handleFrameUrl(url) {
-  if (!url) return;
+function handleFrameUrl(value) {
+  if (!value) return;
+  const url = String(value);
   updateCurrentUrl(url);
+  recordObservedNavigation("navigation", url);
 
+  let parsed = null;
   try {
-    const parsedUrl = new URL(url);
-    const loginRequested =
-      (parsedUrl.hostname === "novelpia.com" ||
-        parsedUrl.hostname === "www.novelpia.com") &&
-      parsedUrl.searchParams.get("login_req") === "1";
-
-    if (loginRequested) {
-      oauthOpenGoogle.textContent = "노벨피아 로그인 모달 열기";
-      oauthFab.hidden = false;
-      setBridgeVisible(true);
-      setStatus(
-        "노벨피아가 로그인 요청 상태예요. 아래 버튼을 누르면 숨겨진 로그인 모달을 표시합니다.",
-        "ready",
-      );
-    }
-  } catch {}
-
-  if (isGoogleAuthUrl(url)) {
-    stopLoginModalWait();
-    lastGoogleAuthUrl = toPortableGoogleAuthUrl(url);
-    oauthOpenGoogle.textContent = "Google에서 로그인";
-    oauthFab.hidden = false;
-    setBridgeVisible(true);
-    setStatus(
-      "Google 로그인 주소를 감지했어요. 아래 버튼으로 Google을 프록시 밖에서 여세요.",
-      "ready",
-    );
+    parsed = new URL(url);
+  } catch {
     return;
   }
 
-  if (callbackPending && isNovelPiaUrl(url)) {
-    let parsed = null;
-    try {
-      parsed = new URL(url);
-    } catch {}
+  const isNovelPia =
+    parsed.hostname === "novelpia.com" ||
+    parsed.hostname === "www.novelpia.com";
 
-    if (parsed && !parsed.searchParams.has("code") && !parsed.searchParams.has("error")) {
-      callbackPending = false;
-      setStatus("노벨피아로 돌아왔어요. 로그인 상태를 확인하세요.", "success");
-      setTimeout(() => setBridgeVisible(false), 1200);
-    }
+  if (isNovelPia && parsed.searchParams.get("login_req") === "1") {
+    oauthOpenGoogle.textContent = "노벨피아 로그인 모달 열기";
+    oauthFab.hidden = false;
+    setBridgeVisible(true);
+    setStatus(
+      "노벨피아가 로그인 요청 상태예요. 아래 버튼을 누르면 로그인 DOM이 나타날 때까지 기다립니다.",
+      "ready",
+    );
+  }
+
+  if (isGoogleAuthUrl(url)) {
+    return;
+  }
+
+  if (
+    callbackPending &&
+    isNovelPia &&
+    parsed.pathname === "/proc/login_google" &&
+    (parsed.searchParams.has("code") || parsed.searchParams.has("error"))
+  ) {
+    setStatus(
+      "콜백 응답을 받았어요. 로그인 처리가 끝나면 노벨피아 홈으로 돌아갑니다.",
+      "ready",
+    );
+
+    setTimeout(() => {
+      if (callbackPending && frame) frame.go(NOVELPIA_HOME);
+    }, 700);
+    return;
+  }
+
+  if (
+    callbackPending &&
+    isNovelPia &&
+    !parsed.searchParams.has("code") &&
+    !parsed.searchParams.has("error")
+  ) {
+    callbackPending = false;
+    setStatus("노벨피아로 돌아왔어요. 로그인 상태를 확인하세요.", "success");
+    setTimeout(() => setBridgeVisible(false), 1200);
   }
 }
 
@@ -213,18 +171,21 @@ function stopLoginModalWait() {
 }
 
 function revealNovelPiaLoginModal() {
-  if (!frame?.frame?.contentWindow) return false;
+  const win = frame?.element?.contentWindow;
+  if (!win) return false;
 
   try {
-    const win = frame.frame.contentWindow;
     const doc = win.document;
-    const elements = [...doc.querySelectorAll("img, a, button, div, span, section")];
+    const elements = [
+      ...doc.querySelectorAll("img, a, button, div, span, section"),
+    ];
 
     const target = elements.find((element) => {
       const text = (element.textContent || "").replace(/\s+/g, " ").trim();
       const alt = (element.getAttribute("alt") || "").trim();
       const title = (element.getAttribute("title") || "").trim();
       const combined = `${text} ${alt} ${title}`;
+
       return (
         combined.includes("구글로 로그인") ||
         combined.includes("SNS 계정 으로 간편하게 로그인")
@@ -234,14 +195,11 @@ function revealNovelPiaLoginModal() {
     if (!target) return false;
 
     let current = target;
-    let revealed = false;
-
     while (current && current !== doc.body) {
       const style = win.getComputedStyle(current);
       const marker = `${current.id || ""} ${current.className || ""}`.toLowerCase();
       const looksLikeLoginLayer =
         /login|signin|modal|popup|layer|member|sns|social/.test(marker);
-
       const hidden =
         current.hidden ||
         current.getAttribute("aria-hidden") === "true" ||
@@ -256,18 +214,18 @@ function revealNovelPiaLoginModal() {
         current.style.setProperty("visibility", "visible", "important");
         current.style.setProperty("opacity", "1", "important");
         current.style.setProperty("pointer-events", "auto", "important");
-        revealed = true;
       }
 
       current = current.parentElement;
     }
 
     target.scrollIntoView({ block: "center", inline: "center" });
-    return revealed || true;
+    return true;
   } catch {
     return false;
   }
 }
+
 function waitForNovelPiaLoginModal() {
   stopLoginModalWait();
   loginModalWaitStartedAt = Date.now();
@@ -285,10 +243,7 @@ function waitForNovelPiaLoginModal() {
     const elapsed = Date.now() - loginModalWaitStartedAt;
     if (elapsed >= LOGIN_MODAL_WAIT_TIMEOUT_MS) {
       stopLoginModalWait();
-      setStatus(
-        "15분 동안 기다렸지만 로그인 DOM이 나타나지 않았어요.",
-        "warning",
-      );
+      setStatus("15분 동안 기다렸지만 로그인 DOM이 나타나지 않았어요.", "warning");
       return;
     }
 
@@ -305,8 +260,7 @@ function waitForNovelPiaLoginModal() {
 }
 
 function refreshOAuthState() {
-  const url = getCurrentFrameUrl();
-  if (url) handleFrameUrl(url);
+  if (currentTargetUrl) handleFrameUrl(currentTargetUrl);
 
   if (!lastGoogleAuthUrl) {
     setStatus(
@@ -314,23 +268,6 @@ function refreshOAuthState() {
       "warning",
     );
   }
-}
-
-async function registerServiceWorker() {
-  if (!navigator.serviceWorker) {
-    throw new Error("이 브라우저는 Service Worker를 지원하지 않습니다.");
-  }
-
-  if (
-    location.protocol !== "https:" &&
-    location.hostname !== "localhost" &&
-    location.hostname !== "127.0.0.1"
-  ) {
-    throw new Error("Service Worker는 HTTPS에서만 사용할 수 있습니다.");
-  }
-
-  await navigator.serviceWorker.register("./sw.js");
-  await navigator.serviceWorker.ready;
 }
 
 function resolveInput(value) {
@@ -348,105 +285,61 @@ function resolveInput(value) {
   }
 }
 
-async function ensureProxyReady() {
-  if (proxyReadyPromise) return proxyReadyPromise;
-
-  proxyReadyPromise = (async () => {
-    try {
-      await registerServiceWorker();
-    } catch (err) {
-      error.textContent = "Failed to register service worker.";
-      errorCode.textContent = err.toString();
-      throw err;
-    }
-
-    const wispUrl =
-      (location.protocol === "https:" ? "wss" : "ws") +
-      "://" +
-      location.host +
-      "/wisp/";
-
-    // BareMux can retain the selected transport name while its actual
-    // transport client has been lost (for example after a worker restart).
-    // Always recreate the libcurl transport before Scramjet starts fetching.
-    await connection.setTransport("/libcurl/index.mjs", [
-      {
-        websocket: wispUrl,
-        connections: [96, 80, 16],
-      },
-    ]);
-  })();
-
-  return proxyReadyPromise;
-}
-
 async function ensureFrame() {
-  await ensureProxyReady();
-  if (frame) return frame;
-
-  frame = scramjet.createFrame();
-  frame.frame.id = "sj-frame";
-  document.body.appendChild(frame.frame);
-  currentUrlBar.hidden = false;
-  updateCurrentUrl("about:blank");
-
-  oauthFab.hidden = false;
-
-  if (typeof frame.addEventListener === "function") {
-    frame.addEventListener("navigate", (event) => {
-      const url =
-        typeof event === "string"
-          ? event
-          : event?.url || event?.detail?.url;
-      recordObservedNavigation("navigate", url);
-    });
-
-    frame.addEventListener("contextInit", (event) => {
-      hookFrameWindowOpen(event?.window || frame?.frame?.contentWindow);
-    });
-
-    frame.addEventListener("urlchange", (event) => {
-      const url =
-        typeof event === "string"
-          ? event
-          : event?.url || event?.detail?.url || frame.url;
-      handleFrameUrl(url);
-    });
+  if (initPromise) {
+    await initPromise;
+    return frame;
   }
 
-  frame.frame.addEventListener("load", () => {
-    hookFrameWindowOpen(frame.frame?.contentWindow);
-    const currentUrl = getCurrentFrameUrl();
-    handleFrameUrl(currentUrl);
+  initPromise = (async () => {
+    if (typeof initBootstrap !== "function") {
+      throw new Error("Scramjet 2 bootstrap loader was not found.");
+    }
 
-    if (!callbackPending || !currentUrl) return;
+    controller = await initBootstrap();
+    if (typeof controller.wait === "function") {
+      await controller.wait();
+    }
 
-    try {
-      const loaded = new URL(currentUrl);
-      const isNovelPiaCallback =
-        (loaded.hostname === "novelpia.com" ||
-          loaded.hostname === "www.novelpia.com") &&
-        loaded.pathname === "/proc/login_google" &&
-        (loaded.searchParams.has("code") || loaded.searchParams.has("error"));
+    const frameElement = document.createElement("iframe");
+    frameElement.id = "sj-frame";
+    document.body.appendChild(frameElement);
 
-      if (isNovelPiaCallback) {
-        setStatus(
-          "콜백 응답을 받았어요. 로그인 상태를 확인하기 위해 노벨피아 홈으로 돌아갑니다.",
-          "ready",
-        );
+    const cachePlugin = new $scramjetUtils.HttpCachePlugin();
+    const urlWatcher = new $scramjetUtils.UrlWatcherPlugin((url) => {
+      handleFrameUrl(url);
+    });
 
-        setTimeout(() => {
-          if (callbackPending && frame) {
-            frame.go(NOVELPIA_HOME);
-          }
-        }, 500);
+    class OAuthCapturePlugin extends $scramjetUtils.ManagedPlugin {
+      constructor() {
+        super("novelpia-oauth-capture", []);
       }
-    } catch {}
-  });
 
-  setInterval(() => {
-    if (frame) handleFrameUrl(getCurrentFrameUrl());
-  }, 1000);
+      install(targetFrame) {
+        super.install(targetFrame);
+        this.tap(targetFrame.hooks.init.post, (context) => {
+          if (!context.isTopLevel) return;
+          hookFrameWindowOpen(context.window);
+          handleFrameUrl(context.client.url.href);
+        });
+      }
+    }
+
+    frame = controller.createFrame(frameElement, {
+      plugins: [cachePlugin, urlWatcher, new OAuthCapturePlugin()],
+    });
+
+    currentUrlBar.hidden = false;
+    updateCurrentUrl("about:blank");
+    oauthFab.hidden = false;
+  })();
+
+  try {
+    await initPromise;
+  } catch (err) {
+    initPromise = null;
+    throw err;
+  }
 
   return frame;
 }
@@ -458,8 +351,12 @@ async function navigate(url) {
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const url = resolveInput(address.value);
-  await navigate(url);
+  try {
+    await navigate(resolveInput(address.value));
+  } catch (err) {
+    error.textContent = "페이지를 열지 못했습니다.";
+    errorCode.textContent = err?.stack || String(err);
+  }
 });
 
 oauthFab.addEventListener("click", () => {
@@ -476,9 +373,11 @@ oauthRefresh.addEventListener("click", () => {
 
   if (lastObservedNavigation) {
     setStatus(
-      `마지막 이동 요청: ${lastObservedNavigation.length > 180
-        ? lastObservedNavigation.slice(0, 177) + "..."
-        : lastObservedNavigation}`,
+      `마지막 이동 요청: ${
+        lastObservedNavigation.length > 180
+          ? lastObservedNavigation.slice(0, 177) + "..."
+          : lastObservedNavigation
+      }`,
       "info",
     );
   }
@@ -500,7 +399,7 @@ currentUrlCopy.addEventListener("click", async () => {
   }
 });
 
-oauthOpenGoogle.addEventListener("click", async () => {
+oauthOpenGoogle.addEventListener("click", () => {
   refreshOAuthState();
 
   if (!lastGoogleAuthUrl || !isGoogleAuthUrl(lastGoogleAuthUrl)) {
@@ -541,17 +440,13 @@ oauthSubmitCallback.addEventListener("click", async () => {
   oauthCallback.value = "";
   setStatus("콜백을 Scramjet의 기존 노벨피아 세션으로 전달하는 중…", "ready");
 
-  const currentFrame = await ensureFrame();
-  currentFrame.go(callbackUrl);
-
-  setTimeout(() => {
-    if (callbackPending) {
-      setStatus(
-        "로그인 상태 확인 중이에요. 노벨피아 홈으로 이동되지 않았다면 OAuth 버튼의 '현재 주소 다시 확인'을 눌러주세요.",
-        "warning",
-      );
-    }
-  }, 5000);
+  try {
+    const currentFrame = await ensureFrame();
+    currentFrame.go(callbackUrl);
+  } catch (err) {
+    callbackPending = false;
+    setStatus(`콜백 전달 실패: ${err?.message || err}`, "error");
+  }
 });
 
 async function boot() {
@@ -562,7 +457,7 @@ async function boot() {
     await navigate(NOVELPIA_HOME);
   } catch (err) {
     error.textContent = "노벨피아 프록시를 시작하지 못했습니다.";
-    errorCode.textContent = err.toString();
+    errorCode.textContent = err?.stack || String(err);
   }
 }
 
