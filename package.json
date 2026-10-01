@@ -1,11 +1,10 @@
 {
 	"name": "scramjet-demo",
-	"version": "2.0.0",
-	"description": "The demo application for Scramjet, a high-performance web proxy.",
+	"version": "3.0.0-experiment",
+	"description": "Novelpia proxy experiment using the Scramjet 2 bootstrap stack.",
 	"type": "module",
 	"engines": {
-		"npm": ">=7.0.0",
-		"node": ">=16.0.0"
+		"node": ">=22.0.0"
 	},
 	"scripts": {
 		"start": "node src/index.js",
@@ -19,13 +18,9 @@
 	"author": "Mercury Workshop",
 	"license": "GNU AFFERO",
 	"dependencies": {
-		"fastify": "^5.7.4",
 		"@fastify/static": "^9.0.0",
-		"@mercuryworkshop/bare-mux": "^2.1.9",
-		"@mercuryworkshop/libcurl-transport": "^1.5.2",
-		"@mercuryworkshop/scramjet": "https://github.com/MercuryWorkshop/scramjet/releases/download/v1.1.0/mercuryworkshop-scramjet-1.1.0.tgz",
-		"@mercuryworkshop/wisp-js": "^0.4.1",
-		"ws": "^8.18.3"
+		"@mercuryworkshop/proxy-bootstrap": "^0.0.5",
+		"fastify": "^5.7.4"
 	},
 	"devDependencies": {
 		"eslint": "^9.13.0",
