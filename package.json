@@ -20,7 +20,8 @@
 	"dependencies": {
 		"@fastify/static": "^9.0.0",
 		"@mercuryworkshop/proxy-bootstrap": "^0.0.5",
-		"fastify": "^5.7.4"
+		"fastify": "^5.7.4",
+		"@mercuryworkshop/wisp-js": "^0.4.1"
 	},
 	"devDependencies": {
 		"eslint": "^9.13.0",
