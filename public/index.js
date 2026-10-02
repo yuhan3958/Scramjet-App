@@ -43,11 +43,25 @@ function setBridgeVisible(visible) {
   oauthBridge.hidden = !visible;
 }
 
+function redactSensitiveUrl(url) {
+  try {
+    const parsed = new URL(String(url));
+    for (const key of ["code", "state", "access_token", "id_token"]) {
+      if (parsed.searchParams.has(key)) {
+        parsed.searchParams.set(key, "[REDACTED]");
+      }
+    }
+    return parsed.toString();
+  } catch {
+    return String(url);
+  }
+}
+
 function updateCurrentUrl(url) {
   if (!url) return;
   currentTargetUrl = String(url);
   currentUrlBar.hidden = false;
-  currentUrlInput.value = currentTargetUrl;
+  currentUrlInput.value = redactSensitiveUrl(currentTargetUrl);
 }
 
 function isNovelPiaUrl(value) {
