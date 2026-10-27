@@ -319,17 +319,9 @@ function createRewrittenStaticCachePlugin(profiler) {
 
         this.touch(key, cached);
 
-        const headers = ctx.request.initialHeaders.clone();
-        for (const name of Object.keys(headers.headers || {})) {
-          headers.delete(name);
-        }
-        for (const [name, value] of cached.headers) {
-          headers.set(name, value);
-        }
-
         props.response = {
           body: cached.body.slice(0),
-          headers,
+          headers: cached.headers.clone(),
           status: cached.status,
           statusText: cached.statusText,
         };
@@ -339,6 +331,7 @@ function createRewrittenStaticCachePlugin(profiler) {
 
       this.tap(targetFrame.hooks.fetch.response, async (ctx, props) => {
         if (!this.storableResponse(ctx, props.response)) return;
+        if (props.response.body instanceof ReadableStream) return;
 
         const buffer = await bodyToArrayBuffer(props.response.body);
         props.response.body = buffer.slice(0);
@@ -347,13 +340,12 @@ function createRewrittenStaticCachePlugin(profiler) {
         const previous = this.entries.get(key);
         if (previous) this.totalBytes -= previous.bytes;
 
-        const rawHeaders = props.response.headers
-          .toRawHeaders()
-          .filter(([name]) => name.toLowerCase() !== "set-cookie");
+        const cachedHeaders = props.response.headers.clone();
+        cachedHeaders.delete("set-cookie");
 
         const entry = {
           body: buffer.slice(0),
-          headers: rawHeaders,
+          headers: cachedHeaders,
           status: props.response.status,
           statusText: props.response.statusText,
           bytes: buffer.byteLength,
