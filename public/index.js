@@ -47,6 +47,13 @@ const REWRITTEN_CACHE_MAX_BYTES = 96 * 1024 * 1024;
 const REWRITTEN_CACHE_MAX_ENTRIES = 256;
 const performanceEntries = [];
 
+const TRANSPORT_IDLE_RECOVERY_MS = 2 * 60 * 1000;
+const TRANSPORT_KEEPALIVE_CHECK_MS = 60 * 1000;
+const TRANSPORT_REQUEST_TIMEOUT_MS = 25 * 1000;
+let lastTransportActivityAt = Date.now();
+let transportRecoveryPromise = null;
+let transportKeepaliveTimer = null;
+
 function setStatus(message, kind = "info") {
   oauthStatus.textContent = message;
   oauthStatus.dataset.kind = kind;
@@ -169,6 +176,260 @@ function maximizeTransportParallelism(transport) {
   if (transport.session?.set_connections) {
     transport.session.set_connections(...MAX_PARALLEL_CONNECTIONS);
   }
+}
+
+function withTimeout(promise, timeoutMs, label = "request") {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+        timeoutMs,
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+async function recoverTransport(reason = "recovery") {
+  const transport = controller?.transport;
+  if (!transport) return;
+  if (transportRecoveryPromise) return transportRecoveryPromise;
+
+  transportRecoveryPromise = (async () => {
+    transport.ready = false;
+    await transport.init();
+    maximizeTransportParallelism(transport);
+    lastTransportActivityAt = Date.now();
+    console.info(`[transport] reinitialized: ${reason}`);
+  })().finally(() => {
+    transportRecoveryPromise = null;
+  });
+
+  return transportRecoveryPromise;
+}
+
+function installResilientTransport(transport) {
+  if (!transport || transport.__novelpiaResilient) return;
+
+  const rawRequest = transport.request.bind(transport);
+  transport.__novelpiaRawRequest = rawRequest;
+  transport.__novelpiaResilient = true;
+
+  transport.request = async (remote, method, body, headers, signal) => {
+    const upperMethod = String(method || "GET").toUpperCase();
+    const retryable = upperMethod === "GET" || upperMethod === "HEAD";
+    lastTransportActivityAt = Date.now();
+
+    try {
+      const requestPromise = rawRequest(remote, method, body, headers, signal);
+      const response = retryable
+        ? await withTimeout(
+            requestPromise,
+            TRANSPORT_REQUEST_TIMEOUT_MS,
+            `${upperMethod} ${remote?.hostname || "request"}`,
+          )
+        : await requestPromise;
+      lastTransportActivityAt = Date.now();
+      return response;
+    } catch (err) {
+      if (!retryable) throw err;
+
+      await recoverTransport("idempotent-request-failure");
+      const response = await rawRequest(remote, method, body, headers, signal);
+      lastTransportActivityAt = Date.now();
+      return response;
+    }
+  };
+}
+
+async function keepTransportWarm() {
+  const transport = controller?.transport;
+  if (!transport) return;
+
+  const idleMs = Date.now() - lastTransportActivityAt;
+  if (idleMs < TRANSPORT_IDLE_RECOVERY_MS) return;
+
+  const rawRequest =
+    transport.__novelpiaRawRequest || transport.request.bind(transport);
+
+  try {
+    await withTimeout(
+      rawRequest(
+        new URL(NOVELPIA_HOME),
+        "HEAD",
+        null,
+        [
+          ["Cache-Control", "no-store"],
+          ["Pragma", "no-cache"],
+        ],
+        undefined,
+      ),
+      10_000,
+      "transport keepalive",
+    );
+    lastTransportActivityAt = Date.now();
+  } catch {
+    await recoverTransport("idle-healthcheck");
+  }
+}
+
+function startTransportMaintenance() {
+  if (!transportKeepaliveTimer) {
+    transportKeepaliveTimer = setInterval(() => {
+      if (!document.hidden) {
+        keepTransportWarm().catch(() => {});
+      }
+    }, TRANSPORT_KEEPALIVE_CHECK_MS);
+  }
+
+  const recoverAfterBackground = () => {
+    if (document.hidden) return;
+    if (Date.now() - lastTransportActivityAt < TRANSPORT_IDLE_RECOVERY_MS) return;
+    recoverTransport("resume-after-idle").catch(() => {});
+  };
+
+  document.addEventListener("visibilitychange", recoverAfterBackground);
+  window.addEventListener("focus", recoverAfterBackground);
+  window.addEventListener("pageshow", recoverAfterBackground);
+}
+
+function isLiveNovelPiaEndpoint(value) {
+  try {
+    const url = new URL(String(value));
+    if (!isNovelPiaUrl(url.href)) return false;
+
+    return (
+      /^\/(?:proc|json|api)\/.*comment/i.test(url.pathname) ||
+      url.pathname.startsWith("/proc/novel_comment/") ||
+      url.pathname === "/proc/viewer_board_comment"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function createLiveDataPlugin() {
+  const Base = $scramjetUtils.ManagedPlugin;
+
+  return new (class LiveDataPlugin extends Base {
+    constructor() {
+      super("novelpia-live-data", []);
+    }
+
+    install(targetFrame) {
+      super.install(targetFrame);
+
+      this.tap(
+        targetFrame.hooks.fetch.request,
+        (ctx, props) => {
+          if (!isLiveNovelPiaEndpoint(ctx.parsed.url.href)) return;
+
+          ctx.request.cache = "no-store";
+          props.init.headers = (props.init.headers || []).filter(
+            ([name]) =>
+              !["cache-control", "pragma"].includes(String(name).toLowerCase()),
+          );
+          props.init.headers.push(["Cache-Control", "no-cache"]);
+          props.init.headers.push(["Pragma", "no-cache"]);
+        },
+        { before: ["scramjet-http-cache"] },
+      );
+    }
+  })();
+}
+
+function createFastEscapePlugin() {
+  const Base = $scramjetUtils.ManagedPlugin;
+
+  return new (class FastEscapePlugin extends Base {
+    constructor() {
+      super("fast-escaped-navigation", []);
+    }
+
+    install(targetFrame) {
+      super.install(targetFrame);
+
+      this.tap(targetFrame.hooks.init.post, (context) => {
+        if (!context.isTopLevel) return;
+
+        const routeEscapedUrl = (rawUrl) => {
+          let resolved;
+          try {
+            resolved = new URL(String(rawUrl), context.client.url.href).href;
+          } catch {
+            return false;
+          }
+
+          if (isGoogleAuthUrl(resolved)) {
+            lastGoogleAuthUrl = toPortableGoogleAuthUrl(resolved);
+            oauthOpenGoogle.textContent = "Google에서 로그인";
+            oauthFab.hidden = false;
+            setBridgeVisible(true);
+            setStatus(
+              "Google 로그인 주소를 감지했어요. 프록시 밖에서 바로 엽니다.",
+              "ready",
+            );
+            window.open(
+              lastGoogleAuthUrl,
+              "_blank",
+              "noopener,noreferrer",
+            );
+            return true;
+          }
+
+          if (isNovelPiaUrl(resolved)) {
+            updateCurrentUrl(resolved);
+            targetFrame.go(resolved);
+            return true;
+          }
+
+          window.open(resolved, "_blank", "noopener,noreferrer");
+          return true;
+        };
+
+        const interceptEscapedAnchor = (event) => {
+          const target = event.target;
+          const anchor = target?.closest?.("a[href]");
+          if (!anchor) return;
+
+          const escaped =
+            anchor.target === "_blank" ||
+            event.button === 1 ||
+            event.ctrlKey ||
+            event.metaKey;
+          if (!escaped) return;
+
+          if (!routeEscapedUrl(anchor.href)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+        };
+
+        context.window.document.addEventListener(
+          "click",
+          interceptEscapedAnchor,
+          true,
+        );
+        context.window.document.addEventListener(
+          "auxclick",
+          interceptEscapedAnchor,
+          true,
+        );
+
+        try {
+          const originalOpen = context.window.open.bind(context.window);
+          context.window.open = (url, target, features) => {
+            if (url && routeEscapedUrl(url)) return null;
+            return originalOpen(url, target, features);
+          };
+        } catch {
+          // If the page makes window.open non-writable, anchor interception
+          // still removes the common extra shell round-trip.
+        }
+      });
+    }
+  })();
 }
 
 function createPerformanceProfilerPlugin() {
@@ -413,25 +674,26 @@ async function ensureFrame() {
 
   controller = await initBootstrap();
   maximizeTransportParallelism(controller.transport);
+  installResilientTransport(controller.transport);
+  startTransportMaintenance();
 
   performanceProfiler = createPerformanceProfilerPlugin();
   rewrittenStaticCache = createRewrittenStaticCachePlugin(performanceProfiler);
 
+  const liveDataPlugin = createLiveDataPlugin();
+  const fastEscapePlugin = createFastEscapePlugin();
   const cachePlugin = new $scramjetUtils.HttpCachePlugin();
   const urlWatcher = new $scramjetUtils.UrlWatcherPlugin((url) => {
     handleUrl(url);
   });
-  const catchEscapedLinks = new $scramjetUtils.CatchEscapedLinksPlugin(
-    (url) => new URL(`/?goto=${encodeURIComponent(url.href)}`, location.origin),
-  );
-
   frame = controller.createFrame(frameElement, {
     plugins: [
       performanceProfiler,
       rewrittenStaticCache,
+      liveDataPlugin,
       cachePlugin,
       urlWatcher,
-      catchEscapedLinks,
+      fastEscapePlugin,
     ],
   });
 
