@@ -27,12 +27,25 @@ const currentUrlBar = document.getElementById("current-url-bar");
 const currentUrlInput = document.getElementById("current-url");
 const currentUrlCopy = document.getElementById("current-url-copy");
 const frameElement = document.getElementById("sj-frame");
+const perfFab = document.getElementById("perf-fab");
+const perfPanel = document.getElementById("perf-panel");
+const perfClose = document.getElementById("perf-close");
+const perfClear = document.getElementById("perf-clear");
+const perfSummary = document.getElementById("perf-summary");
+const perfLog = document.getElementById("perf-log");
 
 let controller = null;
 let frame = null;
 let lastGoogleAuthUrl = null;
 let callbackPending = false;
 let currentTargetUrl = null;
+let performanceProfiler = null;
+let rewrittenStaticCache = null;
+
+const MAX_PARALLEL_CONNECTIONS = [256, 256, 64];
+const REWRITTEN_CACHE_MAX_BYTES = 96 * 1024 * 1024;
+const REWRITTEN_CACHE_MAX_ENTRIES = 256;
+const performanceEntries = [];
 
 function setStatus(message, kind = "info") {
   oauthStatus.textContent = message;
@@ -74,6 +87,289 @@ function isNovelPiaUrl(value) {
   } catch {
     return false;
   }
+}
+
+function performanceLabel(url) {
+  try {
+    const parsed = new URL(String(url));
+    return `${parsed.hostname}${parsed.pathname}${parsed.search ? "?…" : ""}`;
+  } catch {
+    return String(url).slice(0, 120);
+  }
+}
+
+function bodySize(body, headers) {
+  const contentLength = Number(headers?.get?.("content-length"));
+  if (Number.isFinite(contentLength) && contentLength >= 0) return contentLength;
+  if (typeof body === "string") return new TextEncoder().encode(body).byteLength;
+  if (body instanceof ArrayBuffer) return body.byteLength;
+  if (ArrayBuffer.isView(body)) return body.byteLength;
+  if (body instanceof Blob) return body.size;
+  return 0;
+}
+
+async function bodyToArrayBuffer(body) {
+  if (body == null) return new ArrayBuffer(0);
+  if (typeof body === "string") return new TextEncoder().encode(body).buffer;
+  if (body instanceof ArrayBuffer) return body.slice(0);
+  if (ArrayBuffer.isView(body)) {
+    return body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
+  }
+  if (body instanceof Blob) return body.arrayBuffer();
+  if (body instanceof ReadableStream) return new Response(body).arrayBuffer();
+  return new Response(body).arrayBuffer();
+}
+
+function renderPerformancePanel() {
+  if (!perfSummary || !perfLog) return;
+
+  const total = performanceEntries.length;
+  const hits = performanceEntries.filter((entry) => entry.cache === "rewritten").length;
+  const avg = total
+    ? performanceEntries.reduce((sum, entry) => sum + entry.totalMs, 0) / total
+    : 0;
+  const avgRewriteEntries = performanceEntries.filter(
+    (entry) => Number.isFinite(entry.rewriteMs),
+  );
+  const avgRewrite = avgRewriteEntries.length
+    ? avgRewriteEntries.reduce((sum, entry) => sum + entry.rewriteMs, 0) /
+      avgRewriteEntries.length
+    : 0;
+
+  perfSummary.textContent =
+    `요청 ${total} · rewrite-cache hit ${hits} · 평균 ${avg.toFixed(0)}ms · 평균 rewrite ${avgRewrite.toFixed(0)}ms`;
+
+  perfLog.textContent = performanceEntries
+    .slice(0, 30)
+    .map((entry) => {
+      const fetchPart = Number.isFinite(entry.fetchMs)
+        ? `fetch ${entry.fetchMs.toFixed(0)}ms`
+        : "fetch —";
+      const rewritePart = Number.isFinite(entry.rewriteMs)
+        ? `rewrite ${entry.rewriteMs.toFixed(0)}ms`
+        : "rewrite —";
+      const sizePart = entry.bytes
+        ? `${(entry.bytes / 1024).toFixed(entry.bytes >= 1024 * 1024 ? 0 : 1)}KB`
+        : "size —";
+      return `${entry.cache === "rewritten" ? "HIT " : "    "}${entry.destination.padEnd(7)} ${entry.totalMs.toFixed(0).padStart(5)}ms · ${fetchPart} · ${rewritePart} · ${sizePart} · ${entry.url}`;
+    })
+    .join("\n");
+}
+
+function addPerformanceEntry(entry) {
+  performanceEntries.unshift(entry);
+  if (performanceEntries.length > 100) performanceEntries.length = 100;
+  renderPerformancePanel();
+}
+
+function maximizeTransportParallelism(transport) {
+  if (!transport) return;
+  transport.connections = [...MAX_PARALLEL_CONNECTIONS];
+
+  if (transport.session?.set_connections) {
+    transport.session.set_connections(...MAX_PARALLEL_CONNECTIONS);
+  }
+}
+
+function createPerformanceProfilerPlugin() {
+  const Base = $scramjetUtils.ManagedPlugin;
+
+  return new (class PerformanceProfilerPlugin extends Base {
+    constructor() {
+      super("local-performance-profiler", []);
+      this.started = new WeakMap();
+      this.fetchStarted = new WeakMap();
+      this.fetchFinished = new WeakMap();
+    }
+
+    install(targetFrame) {
+      super.install(targetFrame);
+
+      this.tap(targetFrame.hooks.fetch.intercept, (ctx) => {
+        this.started.set(ctx.request, performance.now());
+      });
+
+      this.tap(targetFrame.hooks.fetch.request, (ctx) => {
+        if (!this.started.has(ctx.request)) {
+          this.started.set(ctx.request, performance.now());
+        }
+        this.fetchStarted.set(ctx.request, performance.now());
+      });
+
+      this.tap(targetFrame.hooks.fetch.preresponse, (ctx) => {
+        this.fetchFinished.set(ctx.request, performance.now());
+      });
+
+      this.tap(targetFrame.hooks.fetch.response, (ctx, props) => {
+        const end = performance.now();
+        const start = this.started.get(ctx.request) ?? end;
+        const fetchStart = this.fetchStarted.get(ctx.request);
+        const fetchEnd = this.fetchFinished.get(ctx.request);
+
+        addPerformanceEntry({
+          cache: "pipeline",
+          url: performanceLabel(ctx.parsed.url.href),
+          destination: String(ctx.parsed.destination || "other"),
+          totalMs: end - start,
+          fetchMs:
+            Number.isFinite(fetchStart) && Number.isFinite(fetchEnd)
+              ? fetchEnd - fetchStart
+              : NaN,
+          rewriteMs: Number.isFinite(fetchEnd) ? end - fetchEnd : NaN,
+          bytes: bodySize(props.response.body, props.response.headers),
+        });
+      });
+    }
+
+    recordRewriteCacheHit(ctx, bytes, start) {
+      addPerformanceEntry({
+        cache: "rewritten",
+        url: performanceLabel(ctx.parsed.url.href),
+        destination: String(ctx.parsed.destination || "other"),
+        totalMs: performance.now() - start,
+        fetchMs: 0,
+        rewriteMs: 0,
+        bytes,
+      });
+    }
+  })();
+}
+
+function createRewrittenStaticCachePlugin(profiler) {
+  const Base = $scramjetUtils.ManagedPlugin;
+
+  return new (class RewrittenStaticCachePlugin extends Base {
+    constructor() {
+      super("rewritten-static-cache", []);
+      this.entries = new Map();
+      this.totalBytes = 0;
+    }
+
+    keyFor(ctx) {
+      const headers = ctx.request.initialHeaders;
+      return [
+        ctx.parsed.url.href,
+        ctx.parsed.destination || "",
+        ctx.parsed.isModule ? "module" : "classic",
+        headers.get("accept") || "",
+        headers.get("accept-language") || "",
+      ].join("\n");
+    }
+
+    eligibleRequest(ctx) {
+      if (ctx.request.method !== "GET") return false;
+      if (!["script", "style"].includes(ctx.parsed.destination)) return false;
+
+      try {
+        const url = new URL(ctx.parsed.url.href);
+        if (url.protocol !== "https:") return false;
+        if (/\/(?:proc|api|oauth|login)(?:\/|$)/i.test(url.pathname)) return false;
+        for (const key of ["code", "state", "access_token", "id_token"]) {
+          if (url.searchParams.has(key)) return false;
+        }
+      } catch {
+        return false;
+      }
+
+      return true;
+    }
+
+    storableResponse(ctx, response) {
+      if (!this.eligibleRequest(ctx) || response.status !== 200) return false;
+
+      const cacheControl = (response.headers.get("cache-control") || "").toLowerCase();
+      if (/\b(?:no-store|no-cache|private)\b/.test(cacheControl)) return false;
+
+      const contentType = (response.headers.get("content-type") || "").toLowerCase();
+      return (
+        ctx.parsed.destination === "script"
+          ? /javascript|ecmascript/.test(contentType)
+          : contentType.includes("text/css")
+      );
+    }
+
+    touch(key, entry) {
+      this.entries.delete(key);
+      this.entries.set(key, entry);
+    }
+
+    evict() {
+      while (
+        this.entries.size > REWRITTEN_CACHE_MAX_ENTRIES ||
+        this.totalBytes > REWRITTEN_CACHE_MAX_BYTES
+      ) {
+        const oldestKey = this.entries.keys().next().value;
+        if (!oldestKey) break;
+        const oldest = this.entries.get(oldestKey);
+        this.entries.delete(oldestKey);
+        this.totalBytes -= oldest?.bytes || 0;
+      }
+    }
+
+    install(targetFrame) {
+      super.install(targetFrame);
+
+      this.tap(targetFrame.hooks.fetch.intercept, (ctx, props) => {
+        if (!this.eligibleRequest(ctx)) return;
+
+        const started = performance.now();
+        const key = this.keyFor(ctx);
+        const cached = this.entries.get(key);
+        if (!cached) return;
+
+        this.touch(key, cached);
+
+        const headers = ctx.request.initialHeaders.clone();
+        for (const name of Object.keys(headers.headers || {})) {
+          headers.delete(name);
+        }
+        for (const [name, value] of cached.headers) {
+          headers.set(name, value);
+        }
+
+        props.response = {
+          body: cached.body.slice(0),
+          headers,
+          status: cached.status,
+          statusText: cached.statusText,
+        };
+
+        profiler?.recordRewriteCacheHit(ctx, cached.bytes, started);
+      });
+
+      this.tap(targetFrame.hooks.fetch.response, async (ctx, props) => {
+        if (!this.storableResponse(ctx, props.response)) return;
+
+        const buffer = await bodyToArrayBuffer(props.response.body);
+        props.response.body = buffer.slice(0);
+
+        const key = this.keyFor(ctx);
+        const previous = this.entries.get(key);
+        if (previous) this.totalBytes -= previous.bytes;
+
+        const rawHeaders = props.response.headers
+          .toRawHeaders()
+          .filter(([name]) => name.toLowerCase() !== "set-cookie");
+
+        const entry = {
+          body: buffer.slice(0),
+          headers: rawHeaders,
+          status: props.response.status,
+          statusText: props.response.statusText,
+          bytes: buffer.byteLength,
+        };
+
+        this.entries.set(key, entry);
+        this.totalBytes += entry.bytes;
+        this.evict();
+      });
+    }
+
+    clear() {
+      this.entries.clear();
+      this.totalBytes = 0;
+    }
+  })();
 }
 
 function handleUrl(url) {
@@ -124,6 +420,10 @@ async function ensureFrame() {
   if (frame) return frame;
 
   controller = await initBootstrap();
+  maximizeTransportParallelism(controller.transport);
+
+  performanceProfiler = createPerformanceProfilerPlugin();
+  rewrittenStaticCache = createRewrittenStaticCachePlugin(performanceProfiler);
 
   const cachePlugin = new $scramjetUtils.HttpCachePlugin();
   const urlWatcher = new $scramjetUtils.UrlWatcherPlugin((url) => {
@@ -134,7 +434,13 @@ async function ensureFrame() {
   );
 
   frame = controller.createFrame(frameElement, {
-    plugins: [cachePlugin, urlWatcher, catchEscapedLinks],
+    plugins: [
+      performanceProfiler,
+      rewrittenStaticCache,
+      cachePlugin,
+      urlWatcher,
+      catchEscapedLinks,
+    ],
   });
 
   await controller.wait();
@@ -176,6 +482,21 @@ form.addEventListener("submit", async (event) => {
 
 oauthFab.addEventListener("click", () => {
   setBridgeVisible(oauthBridge.hidden);
+});
+
+perfFab?.addEventListener("click", () => {
+  perfPanel.hidden = !perfPanel.hidden;
+  renderPerformancePanel();
+});
+
+perfClose?.addEventListener("click", () => {
+  perfPanel.hidden = true;
+});
+
+perfClear?.addEventListener("click", () => {
+  performanceEntries.length = 0;
+  rewrittenStaticCache?.clear();
+  renderPerformancePanel();
 });
 
 oauthClose.addEventListener("click", () => setBridgeVisible(false));
