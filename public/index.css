@@ -269,3 +269,81 @@ body {
 	color: #fff;
 	font: inherit;
 }
+
+
+.perf-fab {
+	position: fixed;
+	left: 12px;
+	bottom: calc(12px + env(safe-area-inset-bottom));
+	z-index: 10001;
+	border: 0;
+	border-radius: 999px;
+	padding: 10px 14px;
+	background: #202124;
+	color: #fff;
+	box-shadow: 0 4px 18px rgb(0 0 0 / 35%);
+	font-weight: 600;
+}
+
+.perf-panel {
+	position: fixed;
+	left: 10px;
+	right: 10px;
+	top: 58px;
+	z-index: 10003;
+	max-width: 900px;
+	max-height: min(70vh, 680px);
+	margin: 0 auto;
+	box-sizing: border-box;
+	padding: 14px;
+	border: 1px solid rgb(255 255 255 / 15%);
+	border-radius: 16px;
+	background: rgb(20 20 22 / 96%);
+	color: #fff;
+	box-shadow: 0 12px 40px rgb(0 0 0 / 50%);
+	backdrop-filter: blur(12px);
+	overflow: auto;
+}
+
+.perf-head {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.perf-head button {
+	margin-left: auto;
+	border: 0;
+	background: transparent;
+	color: #fff;
+	font-size: 28px;
+	line-height: 1;
+}
+
+#perf-summary {
+	margin: 10px 0;
+	font-size: 12px;
+	color: #c9c9cf;
+}
+
+#perf-log {
+	margin: 0;
+	padding: 10px;
+	border-radius: 10px;
+	background: #0d0d0f;
+	color: #d8d8dc;
+	white-space: pre;
+	overflow: auto;
+	font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+#perf-clear {
+	margin-top: 10px;
+	min-height: 38px;
+	border: 0;
+	border-radius: 10px;
+	padding: 8px 12px;
+	background: #303136;
+	color: #fff;
+	font: inherit;
+}
