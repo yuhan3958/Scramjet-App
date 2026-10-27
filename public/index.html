@@ -7,15 +7,11 @@
 			content="width=device-width, initial-scale=1.0, shrink-to-fit=no"
 		/>
 		<title>Novelpia Proxy</title>
-
 		<link rel="shortcut icon" content="favicon.webp" />
-
-		<script src="/scram/scramjet.all.js"></script>
-		<script src="/baremux/index.js"></script>
-
 		<link rel="stylesheet" href="index.css" />
-		<script src="register-sw.js" defer></script>
-		<script src="search.js" defer></script>
+
+		<!-- Scramjet 2 bootstrap: service worker, controller and libcurl transport -->
+		<script src="/bootstrap-init.js"></script>
 		<script type="module" src="index.js"></script>
 	</head>
 
@@ -47,6 +43,19 @@
 			<input id="current-url" type="text" readonly value="about:blank" />
 			<button id="current-url-copy" type="button">복사</button>
 		</div>
+
+		<iframe id="sj-frame" title="Novelpia"></iframe>
+
+		<button id="perf-fab" class="perf-fab" type="button">Perf</button>
+		<section id="perf-panel" class="perf-panel" hidden>
+			<div class="perf-head">
+				<strong>Local Performance</strong>
+				<button id="perf-close" type="button" aria-label="닫기">×</button>
+			</div>
+			<p id="perf-summary">아직 측정값이 없습니다.</p>
+			<pre id="perf-log"></pre>
+			<button id="perf-clear" type="button">측정/rewritten cache 초기화</button>
+		</section>
 
 		<button id="oauth-fab" class="oauth-fab" type="button" hidden>OAuth</button>
 
