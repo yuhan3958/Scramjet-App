@@ -42,7 +42,7 @@ let currentTargetUrl = null;
 let performanceProfiler = null;
 let rewrittenStaticCache = null;
 
-const MAX_PARALLEL_CONNECTIONS = [256, 256, 64];
+const MAX_PARALLEL_CONNECTIONS = [256, 256, 256];
 const REWRITTEN_CACHE_MAX_BYTES = 96 * 1024 * 1024;
 const REWRITTEN_CACHE_MAX_ENTRIES = 256;
 const performanceEntries = [];
