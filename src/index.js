@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { hostname } from "node:os";
@@ -10,6 +10,8 @@ import { server as wisp, logging } from "@mercuryworkshop/wisp-js/server";
 const publicPath = fileURLToPath(new URL("../public/", import.meta.url));
 const accessKey = process.env.PROXY_ACCESS_KEY || "";
 const accessCookieName = "__Host-sj_access";
+const clientCookieName = "__Host-sj_client";
+const activeWispSockets = new Map();
 const accessToken = accessKey
 	? createHash("sha256")
 			.update(`scramjet-access:\0${accessKey}`)
@@ -46,6 +48,73 @@ function safeEqual(left, right) {
 	const a = Buffer.from(String(left));
 	const b = Buffer.from(String(right));
 	return a.length === b.length && timingSafeEqual(a, b);
+}
+
+function getClientId(req) {
+	const cookies = parseCookies(req.headers.cookie || "");
+	const clientId = cookies[clientCookieName] || "";
+	return /^[A-Za-z0-9_-]{32,64}$/.test(clientId) ? clientId : null;
+}
+
+function appendSetCookie(reply, cookie) {
+	const current = reply.getHeader("Set-Cookie");
+	if (!current) {
+		reply.header("Set-Cookie", cookie);
+		return;
+	}
+	if (Array.isArray(current)) {
+		reply.header("Set-Cookie", [...current, cookie]);
+		return;
+	}
+	reply.header("Set-Cookie", [String(current), cookie]);
+}
+
+function ensureClientCookie(req, reply) {
+	const existing = getClientId(req);
+	if (existing) return existing;
+
+	const clientId = randomBytes(24).toString("base64url");
+	appendSetCookie(
+		reply,
+		`${clientCookieName}=${clientId}; Path=/; HttpOnly; Secure; SameSite=Strict`,
+	);
+	return clientId;
+}
+
+function trackWispSocket(clientId, socket) {
+	let sockets = activeWispSockets.get(clientId);
+	if (!sockets) {
+		sockets = new Set();
+		activeWispSockets.set(clientId, sockets);
+	}
+
+	sockets.add(socket);
+
+	const cleanup = () => {
+		sockets.delete(socket);
+		if (sockets.size === 0) activeWispSockets.delete(clientId);
+	};
+
+	socket.once("close", cleanup);
+	socket.once("error", cleanup);
+}
+
+function purgeClientNetworkState(clientId) {
+	if (!clientId) return 0;
+
+	const sockets = activeWispSockets.get(clientId);
+	if (!sockets) return 0;
+
+	let closed = 0;
+	for (const socket of [...sockets]) {
+		try {
+			socket.destroy();
+			closed++;
+		} catch {}
+	}
+
+	activeWispSockets.delete(clientId);
+	return closed;
 }
 
 function hasAccess(req) {
@@ -137,11 +206,14 @@ const fastify = Fastify({
 				handler(req, res);
 			})
 			.on("upgrade", (req, socket, head) => {
+				const clientId = getClientId(req);
 				if (
 					req.url?.startsWith("/wisp/") &&
+					clientId &&
 					hasAccess(req) &&
 					isSameOriginWebSocket(req)
 				) {
+					trackWispSocket(clientId, socket);
 					wisp.routeRequest(req, socket, head);
 					return;
 				}
@@ -152,6 +224,8 @@ const fastify = Fastify({
 });
 
 fastify.addHook("onRequest", async (req, reply) => {
+	ensureClientCookie(req.raw, reply);
+
 	if (!accessKey || req.url.startsWith("/__unlock")) return;
 	if (hasAccess(req.raw)) return;
 
@@ -177,12 +251,22 @@ fastify.post("/__unlock", async (req, reply) => {
 			.send({ ok: false });
 	}
 
-	reply.header(
-		"Set-Cookie",
+	appendSetCookie(
+		reply,
 		`${accessCookieName}=${accessToken}; Path=/; HttpOnly; Secure; SameSite=Strict`,
 	);
 	reply.header("Cache-Control", "no-store");
 	return { ok: true };
+});
+
+
+fastify.post("/__privacy/purge", async (req, reply) => {
+	const clientId = getClientId(req.raw);
+	purgeClientNetworkState(clientId);
+
+	reply.header("Cache-Control", "no-store");
+	reply.header("Pragma", "no-cache");
+	return reply.code(204).send();
 });
 
 fastify.register(fastifyStatic, {
