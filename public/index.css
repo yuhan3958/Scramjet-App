@@ -1,5 +1,13 @@
 @import url("https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,300;0,400;0,500;1,300;1,400&display=swap");
 
+:root {
+	--vv-top: 0px;
+	--vv-left: 0px;
+	--vv-width: 100vw;
+	--vv-height: 100dvh;
+	--shell-bar-height: 48px;
+}
+
 html,
 body {
 	width: 100%;
@@ -35,12 +43,12 @@ body {
 #sj-frame {
 	border: none;
 	position: fixed;
-	top: calc(48px + env(safe-area-inset-top));
-	left: 0;
-	right: 0;
-	bottom: env(safe-area-inset-bottom);
-	width: 100%;
-	height: auto;
+	top: calc(var(--vv-top) + var(--shell-bar-height));
+	left: var(--vv-left);
+	width: var(--vv-width);
+	height: max(0px, calc(var(--vv-height) - var(--shell-bar-height)));
+	bottom: auto;
+	right: auto;
 	background-color: #111;
 	z-index: 1;
 }
@@ -236,10 +244,11 @@ body {
 
 .current-url-bar {
 	position: fixed;
-	top: env(safe-area-inset-top);
-	left: 0;
-	right: 0;
-	height: 48px;
+	top: var(--vv-top);
+	left: var(--vv-left);
+	right: auto;
+	width: var(--vv-width);
+	height: var(--shell-bar-height);
 	z-index: 10002;
 	display: flex;
 	align-items: center;
