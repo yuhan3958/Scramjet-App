@@ -351,6 +351,12 @@ async function purgeLocalPrivacyState() {
   } catch {}
 
   try {
+    controller?.cookieJar?.clear?.();
+    await controller?.persistCookies?.();
+    await controller?.propagateCookieSync?.([], { clear: true });
+  } catch {}
+
+  try {
     await fetch("/__privacy/purge", {
       method: "POST",
       credentials: "same-origin",
@@ -362,6 +368,11 @@ async function purgeLocalPrivacyState() {
   try {
     controller.transport.ready = false;
   } catch {}
+
+  lastGoogleAuthUrl = null;
+  callbackPending = false;
+  oauthCallback.value = "";
+  currentTargetUrl = null;
 }
 
 function looksLikeLogoutAnchor(anchor) {
