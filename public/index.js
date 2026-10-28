@@ -53,6 +53,7 @@ const TRANSPORT_REQUEST_TIMEOUT_MS = 25 * 1000;
 let lastTransportActivityAt = Date.now();
 let transportRecoveryPromise = null;
 let transportKeepaliveTimer = null;
+let httpCachePlugin = null;
 
 function setStatus(message, kind = "info") {
   oauthStatus.textContent = message;
@@ -335,6 +336,81 @@ function createLiveDataPlugin() {
         },
         { before: ["scramjet-http-cache"] },
       );
+    }
+  })();
+}
+
+
+async function purgeLocalPrivacyState() {
+  performanceEntries.length = 0;
+  rewrittenStaticCache?.clear();
+  renderPerformancePanel();
+
+  try {
+    await httpCachePlugin?.bust?.();
+  } catch {}
+
+  try {
+    await fetch("/__privacy/purge", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      keepalive: true,
+    });
+  } catch {}
+
+  try {
+    controller.transport.ready = false;
+  } catch {}
+}
+
+function looksLikeLogoutAnchor(anchor) {
+  if (!anchor) return false;
+
+  const text = String(anchor.textContent || "").replace(/\s+/g, " ").trim();
+  const title = String(anchor.getAttribute("title") || "");
+  const aria = String(anchor.getAttribute("aria-label") || "");
+  const href = String(anchor.getAttribute("href") || "");
+
+  return (
+    /로그아웃|logout|sign\s*out/i.test(`${text} ${title} ${aria}`) ||
+    /(?:logout|signout|log_out)/i.test(href)
+  );
+}
+
+function createLogoutPrivacyPlugin() {
+  const Base = $scramjetUtils.ManagedPlugin;
+
+  return new (class LogoutPrivacyPlugin extends Base {
+    constructor() {
+      super("logout-privacy-purge", []);
+    }
+
+    install(targetFrame) {
+      super.install(targetFrame);
+
+      this.tap(targetFrame.hooks.init.post, (context) => {
+        const onClick = (event) => {
+          const anchor = event.target?.closest?.("a[href], button");
+          if (!looksLikeLogoutAnchor(anchor)) return;
+
+          purgeLocalPrivacyState().catch(() => {});
+        };
+
+        context.window.document.addEventListener("click", onClick, true);
+      });
+
+      this.tap(targetFrame.hooks.fetch.request, (ctx) => {
+        const value = ctx.parsed.url.href;
+        if (!isNovelPiaUrl(value)) return;
+
+        try {
+          const url = new URL(value);
+          if (/(?:logout|signout|log_out)/i.test(url.pathname + url.search)) {
+            purgeLocalPrivacyState().catch(() => {});
+          }
+        } catch {}
+      });
     }
   })();
 }
@@ -681,8 +757,10 @@ async function ensureFrame() {
   rewrittenStaticCache = createRewrittenStaticCachePlugin(performanceProfiler);
 
   const liveDataPlugin = createLiveDataPlugin();
+  const logoutPrivacyPlugin = createLogoutPrivacyPlugin();
   const fastEscapePlugin = createFastEscapePlugin();
   const cachePlugin = new $scramjetUtils.HttpCachePlugin();
+  httpCachePlugin = cachePlugin;
   const urlWatcher = new $scramjetUtils.UrlWatcherPlugin((url) => {
     handleUrl(url);
   });
@@ -691,6 +769,7 @@ async function ensureFrame() {
       performanceProfiler,
       rewrittenStaticCache,
       liveDataPlugin,
+      logoutPrivacyPlugin,
       cachePlugin,
       urlWatcher,
       fastEscapePlugin,
