@@ -64,6 +64,51 @@ function setBridgeVisible(visible) {
   oauthBridge.hidden = !visible;
 }
 
+function syncVisualViewport() {
+  const viewport = window.visualViewport;
+  const top = viewport?.offsetTop ?? 0;
+  const left = viewport?.offsetLeft ?? 0;
+  const width = viewport?.width ?? window.innerWidth;
+  const height = viewport?.height ?? window.innerHeight;
+
+  const root = document.documentElement.style;
+  root.setProperty("--vv-top", `${Math.max(0, top)}px`);
+  root.setProperty("--vv-left", `${Math.max(0, left)}px`);
+  root.setProperty("--vv-width", `${Math.max(0, width)}px`);
+  root.setProperty("--vv-height", `${Math.max(0, height)}px`);
+}
+
+let visualViewportRaf = 0;
+function scheduleVisualViewportSync() {
+  cancelAnimationFrame(visualViewportRaf);
+  visualViewportRaf = requestAnimationFrame(syncVisualViewport);
+}
+
+function installVisualViewportTracking() {
+  syncVisualViewport();
+
+  window.addEventListener("resize", scheduleVisualViewportSync, { passive: true });
+  window.addEventListener("orientationchange", () => {
+    scheduleVisualViewportSync();
+    setTimeout(scheduleVisualViewportSync, 100);
+    setTimeout(scheduleVisualViewportSync, 350);
+  });
+
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener(
+      "resize",
+      scheduleVisualViewportSync,
+      { passive: true },
+    );
+    window.visualViewport.addEventListener(
+      "scroll",
+      scheduleVisualViewportSync,
+      { passive: true },
+    );
+  }
+}
+
+
 function redactSensitiveUrl(url) {
   try {
     const parsed = new URL(String(url));
@@ -920,6 +965,7 @@ oauthSubmitCallback.addEventListener("click", async () => {
 });
 
 async function boot() {
+  installVisualViewportTracking();
   address.value = NOVELPIA_HOME;
 
   try {
