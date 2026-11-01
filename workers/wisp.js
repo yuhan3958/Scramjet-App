@@ -29,6 +29,8 @@ function allowedHost(value) {
 }
 const PORTS = new Set([80, 443]);
 const MAX_STREAMS = 3;
+const MAX_WAITING = 48;
+const WAIT_TIMEOUT_MS = 20000;
 const CONNECT_ATTEMPTS = 3;
 const CONNECT_RETRY_DELAY_MS = 400;
 const MAX_QUEUED_BYTES = 256 * 1024;
@@ -46,6 +48,8 @@ export function upgradeWisp(request) {
   server.binaryType = "arraybuffer";
   server.accept();
   const streams = new Map();
+  const waiting = [];
+  let activeCount = 0;
   let ended = false;
   let handshakeComplete = !request.headers.has("Sec-WebSocket-Protocol");
 
@@ -54,14 +58,31 @@ export function upgradeWisp(request) {
   }
   send(handshakeComplete ? continueFrame(0) : frame(5, 0, Uint8Array.of(2, 1)));
 
+  function dispatchWaiting() {
+    if (ended) return;
+    while (activeCount < MAX_STREAMS && waiting.length) {
+      const id = waiting.shift();
+      const state = streams.get(id);
+      if (!state || state.active) continue;
+      clearTimeout(state.waitTimer);
+      state.waitTimer = null;
+      state.active = true;
+      activeCount++;
+      void open(id, state, state.host, state.port);
+    }
+  }
+
   function terminate(id, reason = 2, source = "unknown") {
     const state = streams.get(id);
     if (!state) return;
     streams.delete(id);
     if (state.timer) clearTimeout(state.timer);
+    if (state.waitTimer) clearTimeout(state.waitTimer);
+    if (state.active) activeCount = Math.max(0, activeCount - 1);
     try { state.socket?.close(); } catch {}
     console.log("wisp stream closed", id, reason, source, "lifetime_ms", Date.now() - state.startedAt, "bytes_to_origin", state.bytesUp, "bytes_from_origin", state.bytesDown);
     send(closeFrame(id, reason));
+    dispatchWaiting();
   }
 
   async function pump(id, state) {
@@ -134,6 +155,10 @@ export function upgradeWisp(request) {
         try { state.socket?.close(); } catch {}
         state.socket = null;
         console.warn("wisp connect attempt failed", id, host, port, attempt, String(error));
+        if (/cannot connect to the specified address|HTTP-based service/i.test(String(error))) {
+          terminate(id, 0x48, "worker_tcp_destination_restricted");
+          return;
+        }
         if (attempt === CONNECT_ATTEMPTS) {
           terminate(id, 3, "tcp_connect_retry_exhausted");
           return;
@@ -171,16 +196,31 @@ export function upgradeWisp(request) {
       }
       if (id === 0) return;
       if (msg.type === 1) {
-        const host = msg.host?.toLowerCase().replace(/\.$/, "");
-        if (streams.has(id) || streams.size >= MAX_STREAMS ||
-            msg.protocol !== 1 || !PORTS.has(msg.port) || !allowedHost(host)) {
-          console.warn("wisp connect denied", id, host, msg.port);
-          send(closeFrame(id, streams.size >= MAX_STREAMS ? 0x49 : 0x48));
+        const host = msg.host?.toLowerCase().replace(/\\.$/, "");
+        if (streams.has(id) || msg.protocol !== 1 ||
+            !PORTS.has(msg.port) || !allowedHost(host)) {
+          console.warn("wisp connect denied: destination", id, host, msg.port);
+          send(closeFrame(id, 0x48));
           return;
         }
-        const state = { socket: null, writer: null, pending: [], queuedBytes: 0, flushing: false, timer: null, startedAt: Date.now(), bytesUp: 0, bytesDown: 0 };
+        if (streams.size >= MAX_STREAMS + MAX_WAITING) {
+          console.warn("wisp queue full", id, host);
+          send(closeFrame(id, 0x49));
+          return;
+        }
+        const state = {
+          host, port: msg.port, active: false, waitTimer: null,
+          socket: null, writer: null, pending: [], queuedBytes: 0,
+          flushing: false, timer: null, startedAt: Date.now(),
+          bytesUp: 0, bytesDown: 0
+        };
         streams.set(id, state);
-        void open(id, state, host, msg.port);
+        waiting.push(id);
+        state.waitTimer = setTimeout(() => {
+          if (!state.active && streams.get(id) === state)
+            terminate(id, 0x49, "queue_wait_timeout");
+        }, WAIT_TIMEOUT_MS);
+        dispatchWaiting();
       } else if (msg.type === 2) {
         const state = streams.get(id);
         if (!state) return;
@@ -202,10 +242,13 @@ export function upgradeWisp(request) {
     console.log("wisp websocket cleanup", "active_streams", streams.size);
     ended = true;
     for (const state of streams.values()) {
+      if (state.waitTimer) clearTimeout(state.waitTimer);
       if (state.timer) clearTimeout(state.timer);
       try { state.socket?.close(); } catch {}
     }
     streams.clear();
+    waiting.length = 0;
+    activeCount = 0;
   };
   server.addEventListener("close", cleanup);
   server.addEventListener("error", cleanup);
