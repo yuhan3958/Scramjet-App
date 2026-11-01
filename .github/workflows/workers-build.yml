@@ -1,0 +1,30 @@
+name: Workers build check
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/cloudflare-workers]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned browser packages
+        run: |
+          npm install --no-save --package-lock=false --ignore-scripts \
+            @mercuryworkshop/proxy-bootstrap@0.0.5 \
+            @mercuryworkshop/scramjet@2.0.67-alpha.2 \
+            @mercuryworkshop/scramjet-controller@0.0.14 \
+            @mercuryworkshop/scramjet-utils@0.0.3 \
+            @mercuryworkshop/libcurl-transport@2.0.5
+      - name: Stage browser assets
+        run: node scripts/stage-workers-assets.mjs
+      - name: Check Worker syntax
+        run: |
+          node --check workers/index.js
+          node --check workers/wisp-framing.js
+          node --check workers/wisp.js
+      - name: Build Workers bundle
+        run: npx --yes wrangler@4 deploy --dry-run --outdir .workers-build
