@@ -16,6 +16,7 @@ export function upgradeWisp(request) {
 
   const pair = new WebSocketPair();
   const server = pair[1];
+  server.binaryType = "arraybuffer";
   server.accept();
   const streams = new Map();
   let ended = false;
@@ -99,9 +100,20 @@ export function upgradeWisp(request) {
 
   server.addEventListener("message", event => {
     void (async () => {
-      if (!(event.data instanceof ArrayBuffer)) return;
+      const payload = event.data instanceof ArrayBuffer
+        ? event.data
+        : event.data instanceof Blob
+          ? await event.data.arrayBuffer()
+          : null;
+      if (!payload) {
+        console.warn("wisp ignored non-binary message");
+        return;
+      }
       let msg;
-      try { msg = parseFrame(event.data); } catch { return; }
+      try { msg = parseFrame(payload); } catch (error) {
+        console.warn("wisp invalid frame", String(error));
+        return;
+      }
       const id = msg.streamId;
       if (!handshakeComplete) {
         if (msg.type === 5 && id === 0 && msg.data.byteLength >= 2) {
