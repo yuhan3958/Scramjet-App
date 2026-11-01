@@ -42,7 +42,9 @@ let currentTargetUrl = null;
 let performanceProfiler = null;
 let rewrittenStaticCache = null;
 
-const MAX_PARALLEL_CONNECTIONS = [256, 256, 256];
+// [maximum active connections, idle connection cache, connections per host].
+// Match the Workers Wisp capacity, and avoid a single host exhausting all slots.
+const MAX_PARALLEL_CONNECTIONS = [3, 2, 1];
 const REWRITTEN_CACHE_MAX_BYTES = 96 * 1024 * 1024;
 const REWRITTEN_CACHE_MAX_ENTRIES = 256;
 const performanceEntries = [];
@@ -264,25 +266,28 @@ function installResilientTransport(transport) {
 
   transport.request = async (remote, method, body, headers, signal) => {
     const upperMethod = String(method || "GET").toUpperCase();
-    const retryable = upperMethod === "GET" || upperMethod === "HEAD";
+    const retryable = (upperMethod === "GET" || upperMethod === "HEAD");
     lastTransportActivityAt = Date.now();
 
+    const attempt = () => rawRequest(remote, method, body, headers, signal);
     try {
-      const requestPromise = rawRequest(remote, method, body, headers, signal);
       const response = retryable
-        ? await withTimeout(
-            requestPromise,
-            TRANSPORT_REQUEST_TIMEOUT_MS,
-            `${upperMethod} ${remote?.hostname || "request"}`,
-          )
-        : await requestPromise;
+        ? await withTimeout(attempt(), TRANSPORT_REQUEST_TIMEOUT_MS, upperMethod)
+        : await attempt();
       lastTransportActivityAt = Date.now();
       return response;
-    } catch (err) {
-      if (!retryable) throw err;
-
-      await recoverTransport("idempotent-request-failure");
-      const response = await rawRequest(remote, method, body, headers, signal);
+    } catch (error) {
+      if (!retryable || signal?.aborted) throw error;
+      const message = String(error?.message || error);
+      // Blocked destinations, TLS negotiation failures and authorization errors
+      // are not repaired by resetting the shared libcurl session.
+      if (/cannot connect to the specified address|SSL connect error|error code 35|forbidden|blocked|403|429/i.test(message))
+        throw error;
+      // Retry an idempotent request at most once, without rebuilding the shared
+      // transport and disrupting concurrent page loads.
+      await new Promise(resolve => setTimeout(resolve, 400));
+      if (signal?.aborted) throw error;
+      const response = await withTimeout(attempt(), TRANSPORT_REQUEST_TIMEOUT_MS, upperMethod);
       lastTransportActivityAt = Date.now();
       return response;
     }
