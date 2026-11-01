@@ -11,6 +11,7 @@ const EXACT_HOSTS = new Set([
   "googleads.g.doubleclick.net", "stats.g.doubleclick.net",
   "connect.facebook.net", "static.cloudflareinsights.com",
   "cdnjs.cloudflare.com", "cdn.jsdelivr.net", "unpkg.com",
+  "oauth2.googleapis.com", "www.google.com.hk",
   "ajax.googleapis.com", "code.jquery.com",
 ]);
 const HOST_SUFFIXES = [
@@ -28,7 +29,7 @@ function allowedHost(value) {
   return EXACT_HOSTS.has(host) || HOST_SUFFIXES.some(suffix => host.endsWith(suffix));
 }
 const PORTS = new Set([80, 443]);
-const MAX_STREAMS = 3;
+const MAX_STREAMS = 5;
 const MAX_WAITING = 48;
 const WAIT_TIMEOUT_MS = 20000;
 const CONNECT_ATTEMPTS = 3;
@@ -49,6 +50,12 @@ export function upgradeWisp(request) {
   server.accept();
   const streams = new Map();
   const waiting = [];
+  function priority(host) {
+    if (host === "novelpia.com" || host.endsWith(".novelpia.com")) return 0;
+    if (host === "accounts.google.com" || host === "oauth2.googleapis.com") return 1;
+    if (host.startsWith("fonts.")) return 2;
+    return 3;
+  }
   let activeCount = 0;
   let ended = false;
   let handshakeComplete = !request.headers.has("Sec-WebSocket-Protocol");
@@ -61,6 +68,7 @@ export function upgradeWisp(request) {
   function dispatchWaiting() {
     if (ended) return;
     while (activeCount < MAX_STREAMS && waiting.length) {
+      waiting.sort((a, b) => priority(streams.get(a)?.host || "") - priority(streams.get(b)?.host || ""));
       const id = waiting.shift();
       const state = streams.get(id);
       if (!state || state.active) continue;
