@@ -1,3 +1,4 @@
+import { upgradeWisp } from "./wisp.js";
 const encoder = new TextEncoder();
 
 function bytesToHex(bytes) {
@@ -51,7 +52,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/__health") {
-      return respondJson({ ok: true, mode: "workers-experimental", proxyReady: false });
+      return respondJson({ ok: true, mode: "workers-experimental", proxyReady: true });
     }
     if (!env.PROXY_ACCESS_KEY) {
       return respondJson({ error: "Set PROXY_ACCESS_KEY using wrangler secret put" }, 503);
@@ -77,8 +78,8 @@ export default {
       return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
     }
     if (!(await loggedIn(request, env))) return loginPage();
-    if (url.pathname === "/wisp/" || url.pathname.startsWith("/wisp/") || url.pathname === "/bootstrap-init.js") {
-      return respondJson({ error: "Wisp and bootstrap are not ported yet" }, 501);
+    if (url.pathname === "/wisp/" || url.pathname.startsWith("/wisp/")) {
+      return upgradeWisp(request);
     }
     if (request.method !== "GET" && request.method !== "HEAD") return respondJson({ error: "Method not allowed" }, 405);
     const assetResponse = await env.ASSETS.fetch(request);
