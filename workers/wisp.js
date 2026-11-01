@@ -19,6 +19,18 @@ const HOST_SUFFIXES = [
   ".googleusercontent.com", ".gstatic.com", ".googleapis.com",
   ".googlevideo.com", ".ggpht.com", ".google.com",
   ".youtube.com", ".ytimg.com", ".doubleclick.net",
+  // Public API, identity and asset services from major providers.
+  ".apple.com", ".cdn-apple.com", ".icloud.com",
+  ".microsoft.com", ".microsoftonline.com", ".msauth.net", ".live.com",
+  ".github.com", ".githubusercontent.com", ".githubassets.com",
+  ".kakao.com", ".kakao.co.kr", ".kakaocdn.net",
+  ".naver.com", ".naver.net", ".pstatic.net",
+  ".daum.net", ".daumcdn.net",
+  ".facebook.com", ".fbcdn.net", ".instagram.com",
+  ".discord.com", ".discordapp.com", ".discordapp.net",
+  ".cloudfront.net", ".amazonaws.com", ".amazon.com",
+  ".stripe.com", ".paypal.com",
+  ".twitter.com", ".twimg.com", ".x.com",
 ];
 function allowedHost(value) {
   if (typeof value !== "string") return false;
@@ -204,7 +216,7 @@ export function upgradeWisp(request) {
       }
       if (id === 0) return;
       if (msg.type === 1) {
-        const host = msg.host?.toLowerCase().replace(/\\.$/, "");
+        const host = msg.host?.toLowerCase().replace(/\.$/, "");
         if (streams.has(id) || msg.protocol !== 1 ||
             !PORTS.has(msg.port) || !allowedHost(host)) {
           console.warn("wisp connect denied: destination", id, host, msg.port);
