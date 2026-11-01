@@ -12,7 +12,9 @@ export function upgradeWisp(request) {
   const streams=new Map();
   let ended=false;
   const send=(data)=>{if(!ended && server.readyState===1)server.send(data);};
-  send(continueFrame(0));
+  const usesV2 = Boolean(request.headers.get("Sec-WebSocket-Protocol"));
+  let handshakeComplete = !usesV2;
+  send(usesV2 ? frame(5, 0, Uint8Array.of(2, 1)) : continueFrame(0));
   function terminate(id) {
     const state=streams.get(id);
     if(!state)return;
@@ -26,6 +28,14 @@ export function upgradeWisp(request) {
       let msg;
       try { msg=parseFrame(event.data); }catch{return;}
       const id=msg.streamId;
+      if (!handshakeComplete) {
+        if (msg.type===5 && id===0 && msg.data.length>=2) {
+          handshakeComplete=true;
+          send(continueFrame(0));
+        } else { try { server.close(1002, "Bad Wisp handshake"); } catch {} }
+        return;
+      }
+      if (id===0) return;
       if (msg.type===1) {
         if (streams.has(id)||streams.size>=4||msg.protocol!==1||!allowedPorts.has(msg.port)||!allowedDomains.has(msg.host.toLowerCase())) {
           send(closeFrame(id));return;
@@ -59,5 +69,7 @@ export function upgradeWisp(request) {
   const cleanup=()=>{ended=true;for(const state of streams.values())try{state.socket?.close();}catch{}streams.clear();};
   server.addEventListener("close",cleanup);
   server.addEventListener("error",cleanup);
-  return new Response(null,{status:101,webSocket:pair[0]});
+  const protocol = request.headers.get("Sec-WebSocket-Protocol");
+  const headers = protocol ? { "Sec-WebSocket-Protocol": protocol.split(",")[0].trim() } : {};
+  return new Response(null,{status:101,webSocket:pair[0],headers});
 }
