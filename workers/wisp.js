@@ -28,7 +28,9 @@ function allowedHost(value) {
   return EXACT_HOSTS.has(host) || HOST_SUFFIXES.some(suffix => host.endsWith(suffix));
 }
 const PORTS = new Set([80, 443]);
-const MAX_STREAMS = 5;
+const MAX_STREAMS = 3;
+const CONNECT_ATTEMPTS = 3;
+const CONNECT_RETRY_DELAY_MS = 400;
 const MAX_QUEUED_BYTES = 256 * 1024;
 const OPEN_TIMEOUT_MS = 12000;
 const closeFrame = (id, reason = 2) => frame(4, id, Uint8Array.of(reason));
@@ -101,27 +103,45 @@ export function upgradeWisp(request) {
   }
 
   async function open(id, state, host, port) {
-    console.log("wisp connect start", id, host, port);
-    try {
-      const socket = connect({ hostname: host, port }, { secureTransport: "off" });
-      state.socket = socket;
-      await Promise.race([
-        socket.opened,
-        new Promise((_, reject) => {
-          state.timer = setTimeout(() => reject(new Error("TCP connect timeout")), OPEN_TIMEOUT_MS);
-        })
-      ]);
-      clearTimeout(state.timer);
-      state.timer = null;
-      if (streams.get(id) !== state) { socket.close(); return; }
-      state.writer = socket.writable.getWriter();
-      console.log("wisp tcp opened", id, host, port);
-      send(continueFrame(id));
-      void pump(id, state);
-      void flush(id, state);
-    } catch (error) {
-      console.warn("wisp tcp connect failed", id, host, port, String(error));
-      terminate(id, 3, "tcp_connect_failure");
+    for (let attempt = 1; attempt <= CONNECT_ATTEMPTS; attempt++) {
+      if (ended || streams.get(id) !== state) return;
+      console.log("wisp connect attempt", id, host, port, attempt);
+      try {
+        // Raw TCP is required: the browser-side libcurl performs TLS itself.
+        const socket = connect({ hostname: host, port }, { secureTransport: "off" });
+        state.socket = socket;
+        await Promise.race([
+          socket.opened,
+          new Promise((_, reject) => {
+            state.timer = setTimeout(() => reject(new Error("TCP connect timeout")), OPEN_TIMEOUT_MS);
+          })
+        ]);
+        clearTimeout(state.timer);
+        state.timer = null;
+        if (ended || streams.get(id) !== state) {
+          try { socket.close(); } catch {}
+          return;
+        }
+        state.writer = socket.writable.getWriter();
+        console.log("wisp tcp opened", id, host, port, "attempt", attempt);
+        send(continueFrame(id));
+        void pump(id, state);
+        void flush(id, state);
+        return;
+      } catch (error) {
+        if (state.timer) clearTimeout(state.timer);
+        state.timer = null;
+        try { state.socket?.close(); } catch {}
+        state.socket = null;
+        console.warn("wisp connect attempt failed", id, host, port, attempt, String(error));
+        if (attempt === CONNECT_ATTEMPTS) {
+          terminate(id, 3, "tcp_connect_retry_exhausted");
+          return;
+        }
+        // Never replay a connection after TLS bytes have been delivered.
+        // These retries only apply before the TCP socket has opened.
+        await new Promise(resolve => setTimeout(resolve, CONNECT_RETRY_DELAY_MS * attempt));
+      }
     }
   }
 
@@ -155,7 +175,7 @@ export function upgradeWisp(request) {
         if (streams.has(id) || streams.size >= MAX_STREAMS ||
             msg.protocol !== 1 || !PORTS.has(msg.port) || !allowedHost(host)) {
           console.warn("wisp connect denied", id, host, msg.port);
-          send(closeFrame(id, 2));
+          send(closeFrame(id, streams.size >= MAX_STREAMS ? 0x49 : 0x48));
           return;
         }
         const state = { socket: null, writer: null, pending: [], queuedBytes: 0, flushing: false, timer: null, startedAt: Date.now(), bytesUp: 0, bytesDown: 0 };
