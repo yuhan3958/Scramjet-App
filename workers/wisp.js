@@ -21,9 +21,9 @@ const HOST_SUFFIXES = [
 ];
 function allowedHost(value) {
   if (typeof value !== "string") return false;
-  const host = value.toLowerCase().replace(/\\.$/, "");
+  const host = value.toLowerCase().replace(/\.$/, "");
   if (host.length > 253 || !/^[a-z0-9.-]+$/.test(host) ||
-      host.includes("..") || /^\\d+(?:\\.\\d+){3}$/.test(host) ||
+      host.includes("..") || /^[0-9.]+$/.test(host) ||
       host === "localhost" || host.endsWith(".localhost")) return false;
   return EXACT_HOSTS.has(host) || HOST_SUFFIXES.some(suffix => host.endsWith(suffix));
 }
