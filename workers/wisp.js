@@ -1,7 +1,13 @@
 import { connect } from "cloudflare:sockets";
 import { parseFrame, frame, continueFrame } from "./wisp-framing.js";
 
-const HOSTS = new Set(["novelpia.com", "www.novelpia.com", "images.novelpia.com"]);
+const HOSTS = new Set([
+  "novelpia.com",
+  "www.novelpia.com",
+  "images.novelpia.com",
+  "fonts.googleapis.com",
+  "fonts.gstatic.com",
+]);
 const PORTS = new Set([80, 443]);
 const MAX_STREAMS = 4;
 const MAX_QUEUED_BYTES = 256 * 1024;
