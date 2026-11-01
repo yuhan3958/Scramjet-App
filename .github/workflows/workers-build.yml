@@ -21,6 +21,8 @@ jobs:
             @mercuryworkshop/libcurl-transport@2.0.5
       - name: Stage browser assets
         run: node scripts/stage-workers-assets.mjs
+      - name: Test Wisp framing
+        run: node --test test/workers-wisp.test.mjs
       - name: Check Worker syntax
         run: |
           node --check workers/index.js
