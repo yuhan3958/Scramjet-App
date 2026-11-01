@@ -11,7 +11,21 @@
 		<link rel="stylesheet" href="index.css" />
 
 		<!-- Scramjet 2 bootstrap: service worker, controller and libcurl transport -->
-		<script src="/bootstrap-init.js"></script>
+		<script>
+			window.addEventListener("error", (event) => {
+				const el = document.getElementById("sj-error");
+				const details = document.getElementById("sj-error-code");
+				if (el) el.textContent = "클라이언트 JavaScript 초기화 오류";
+				if (details) details.textContent = event.message || "Script load failed";
+			});
+			window.addEventListener("unhandledrejection", (event) => {
+				const el = document.getElementById("sj-error");
+				const details = document.getElementById("sj-error-code");
+				if (el) el.textContent = "Scramjet 초기화 Promise 오류";
+				if (details) details.textContent = String(event.reason?.stack || event.reason);
+			});
+		</script>
+		<script src="/bootstrap-init.js" onerror="document.addEventListener('DOMContentLoaded',()=>{document.getElementById('sj-error').textContent='Bootstrap 파일 로드 실패';document.getElementById('sj-error-code').textContent='/bootstrap-init.js 가 생성되고 배포됐는지 확인하세요.'})"></script>
 		<script type="module" src="index.js"></script>
 	</head>
 
