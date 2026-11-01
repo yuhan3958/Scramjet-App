@@ -52,7 +52,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/__health") {
-      return respondJson({ ok: true, mode: "workers-experimental", proxyReady: true });
+      return respondJson({ ok: true, mode: "workers-experimental", proxyReady: false, transportImplemented: true, integrationTested: false });
     }
     if (!env.PROXY_ACCESS_KEY) {
       return respondJson({ error: "Set PROXY_ACCESS_KEY using wrangler secret put" }, 503);
