@@ -1,15 +1,34 @@
 import { connect } from "cloudflare:sockets";
 import { parseFrame, frame, continueFrame } from "./wisp-framing.js";
 
-const HOSTS = new Set([
-  "novelpia.com",
-  "www.novelpia.com",
-  "images.novelpia.com",
-  "fonts.googleapis.com",
-  "fonts.gstatic.com",
+// Restrict outbound sockets to the domains used by the site and common web assets.
+// Avoid arbitrary destinations, IP literals, local hosts and private-network access.
+const EXACT_HOSTS = new Set([
+  "novelpia.com", "www.novelpia.com", "images.novelpia.com",
+  "accounts.google.com", "fonts.googleapis.com", "fonts.gstatic.com",
+  "www.google.com", "www.gstatic.com", "www.google-analytics.com",
+  "www.googletagmanager.com", "www.googleadservices.com",
+  "googleads.g.doubleclick.net", "stats.g.doubleclick.net",
+  "connect.facebook.net", "static.cloudflareinsights.com",
+  "cdnjs.cloudflare.com", "cdn.jsdelivr.net", "unpkg.com",
+  "ajax.googleapis.com", "code.jquery.com",
 ]);
+const HOST_SUFFIXES = [
+  ".novelpia.com",
+  ".googleusercontent.com", ".gstatic.com", ".googleapis.com",
+  ".googlevideo.com", ".ggpht.com", ".google.com",
+  ".youtube.com", ".ytimg.com", ".doubleclick.net",
+];
+function allowedHost(value) {
+  if (typeof value !== "string") return false;
+  const host = value.toLowerCase().replace(/\\.$/, "");
+  if (host.length > 253 || !/^[a-z0-9.-]+$/.test(host) ||
+      host.includes("..") || /^\\d+(?:\\.\\d+){3}$/.test(host) ||
+      host === "localhost" || host.endsWith(".localhost")) return false;
+  return EXACT_HOSTS.has(host) || HOST_SUFFIXES.some(suffix => host.endsWith(suffix));
+}
 const PORTS = new Set([80, 443]);
-const MAX_STREAMS = 4;
+const MAX_STREAMS = 5;
 const MAX_QUEUED_BYTES = 256 * 1024;
 const OPEN_TIMEOUT_MS = 12000;
 const closeFrame = (id, reason = 2) => frame(4, id, Uint8Array.of(reason));
@@ -132,7 +151,7 @@ export function upgradeWisp(request) {
       if (msg.type === 1) {
         const host = msg.host?.toLowerCase().replace(/\.$/, "");
         if (streams.has(id) || streams.size >= MAX_STREAMS ||
-            msg.protocol !== 1 || !PORTS.has(msg.port) || !HOSTS.has(host)) {
+            msg.protocol !== 1 || !PORTS.has(msg.port) || !allowedHost(host)) {
           console.warn("wisp connect denied", id, host, msg.port);
           send(closeFrame(id, 2));
           return;
