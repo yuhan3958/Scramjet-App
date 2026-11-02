@@ -20,12 +20,12 @@
 	"dependencies": {
 		"@fastify/static": "^9.0.0",
 		"@mercuryworkshop/proxy-bootstrap": "^0.0.5",
-		"fastify": "^5.7.4",
-		"@mercuryworkshop/wisp-js": "^0.4.1"
+		"@mercuryworkshop/wisp-js": "^0.4.1",
+		"fastify": "^5.7.4"
 	},
 	"devDependencies": {
 		"eslint": "^9.13.0",
 		"prettier": "^3.3.3"
 	},
-	"packageManager": "pnpm@10.18.3"
+	"packageManager": "pnpm@12.16.1"
 }
